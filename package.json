@@ -1,12 +1,12 @@
 {
     "name": "travelpay-backend",
     "version": "1.0.0",
-    "main": "server.js",
+    "main": "index.js",
     "scripts": {
-      "start": "node server.js"
+      "start": "json-server --watch db.json --port 10000"
     },
     "dependencies": {
-      "json-server": "^0.17.3"
+      "json-server": "^0.17.0"
     }
   }
   
