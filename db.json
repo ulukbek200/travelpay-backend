@@ -1,0 +1,28 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "name": "Ulukbek",
+      "email": "uluk@gmail.com",
+      "password": "1234",
+      "balance": 100,
+      "isLoggedIn": false
+    },
+    {
+      "name": "Ulukbek",
+      "email": "uluk09@gmail.com",
+      "password": "1234",
+      "balance": 0,
+      "isLoggedIn": true,
+      "id": 2
+    },
+    {
+      "name": "Maga",
+      "email": "Auf@gmail.com",
+      "password": "12345",
+      "balance": 0,
+      "isLoggedIn": true,
+      "id": 3
+    }
+  ]
+}
