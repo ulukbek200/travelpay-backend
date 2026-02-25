@@ -23,6 +23,14 @@
       "balance": 0,
       "isLoggedIn": true,
       "id": 3
+    },
+    {
+      "name": "uluk",
+      "email": "uluk01@gmail.com",
+      "password": "12345",
+      "balance": 0,
+      "isLoggedIn": true,
+      "id": 4
     }
   ]
 }
