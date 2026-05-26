@@ -661,10 +661,18 @@ app.post('/api/chat', asyncHandler(async (req, res) => {
 app.use((error, req, res, next) => {
   console.error('API error:', error);
   const isStorageError = error.message?.includes('Persistent storage');
+  const isMongoError = (
+    error.name?.includes('Mongo') ||
+    error.message?.toLowerCase().includes('mongodb') ||
+    error.message?.toLowerCase().includes('querysrv') ||
+    error.message?.toLowerCase().includes('authentication failed') ||
+    error.message?.toLowerCase().includes('bad auth') ||
+    error.message?.toLowerCase().includes('server selection')
+  );
 
   res.status(500).json({
-    message: isStorageError
-      ? 'Backend storage is not configured. Add MONGODB_URI in deployment environment variables.'
+    message: isStorageError || isMongoError
+      ? 'Database connection failed. Check MONGODB_URI, MongoDB user password, and Network Access in MongoDB Atlas.'
       : 'Internal server error',
   });
 });
