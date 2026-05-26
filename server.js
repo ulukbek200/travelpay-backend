@@ -1,32 +1,582 @@
-const jsonServer = require("json-server");
-const cors = require("cors");
+﻿const express = require('express');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
-const server = jsonServer.create();
-const router = jsonServer.router("db.json");
-const middlewares = jsonServer.defaults();
+const loadLocalEnv = () => {
+  const envFiles = [
+    path.join(__dirname, '..', '.env.local'),
+    path.join(__dirname, '..', '.env'),
+    path.join(__dirname, '.env'),
+  ];
 
-const port = process.env.PORT || 10000;
+  envFiles.forEach((envFile) => {
+    if (!fs.existsSync(envFile)) return;
 
-server.use(middlewares);
-server.use(jsonServer.bodyParser);
+    fs.readFileSync(envFile, 'utf8')
+      .split(/\r?\n/)
+      .forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) return;
 
-// ✅ ВАЖНО: Railway + Vercel
-server.use(
-  cors({
-    origin: [
-      "https://travelpay-iota.vercel.app",
-      "http://localhost:5173"
-    ],
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+        const [key, ...valueParts] = trimmed.split('=');
+        const value = valueParts.join('=').trim().replace(/^["']|["']$/g, '');
+        if (key && !process.env[key]) {
+          process.env[key] = value;
+        }
+      });
+  });
+};
 
-// ✅ Preflight
-server.options("*", cors());
+loadLocalEnv();
 
-server.use(router);
+const app = express();
+const PORT = process.env.PORT || 10000;
+const DB_FILE = path.join(__dirname, 'db.json');
 
-server.listen(port, () =>
-  console.log(`JSON Server running on port ${port}`)
-);
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+const defaultDb = {
+  users: [
+    {
+      id: 1,
+      name: 'Admin',
+      email: 'admin@travelpay.kg',
+      password: 'admin123',
+      balance: 10000,
+      role: 'admin',
+      avatar: 'https://www.w3schools.com/howto/img_avatar.png',
+      isLoggedIn: true,
+      favorites: [],
+    },
+  ],
+  tours: [
+    {
+      id: 1,
+      title: 'РўСѓСЂ РЅР° РСЃСЃС‹Рє-РљСѓР»СЊ',
+      description: 'РћР·РµСЂРѕ, РіРѕСЂРЅС‹Рµ РїРµР№Р·Р°Р¶Рё, РєСѓРїР°РЅРёРµ Рё СЃРїРѕРєРѕР№РЅС‹Р№ РѕС‚РґС‹С… РЅР° Р±РµСЂРµРіСѓ.',
+      duration: '4 РґРЅСЏ',
+      price: 14000,
+      image: 'https://sputnik.kg/img/102749/78/1027497816_0:0:5241:3494_600x0_80_0_0_1de71c91552a01c3bc55f0df20f16329.jpg',
+      location: 'РСЃСЃС‹Рє-РљСѓР»СЊ',
+    },
+    {
+      id: 2,
+      title: 'Р‘Р°С€РЅСЏ Р‘СѓСЂР°РЅР°',
+      description: 'РСЃС‚РѕСЂРёС‡РµСЃРєРёР№ РѕРґРЅРѕРґРЅРµРІРЅС‹Р№ С‚СѓСЂ РїРѕ СЃР»РµРґР°Рј Р’РµР»РёРєРѕРіРѕ С€РµР»РєРѕРІРѕРіРѕ РїСѓС‚Рё.',
+      duration: '1 РґРµРЅСЊ',
+      price: 2500,
+      image: 'https://central-asia.live/_next/image?url=https%3A%2F%2Fcentral-asia.live%2Fuploads%2Fburana-tower.jpg&w=3840&q=75',
+      location: 'Р§СѓР№СЃРєР°СЏ РѕР±Р»Р°СЃС‚СЊ',
+    },
+  ],
+};
+
+const ensureDb = () => {
+  if (!fs.existsSync(DB_FILE)) {
+    fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2), 'utf8');
+  }
+};
+
+const readDb = () => {
+  ensureDb();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    return {
+      users: Array.isArray(parsed.users)
+        ? parsed.users.map((user) => ({
+            ...user,
+            favorites: Array.isArray(user.favorites) ? user.favorites : [],
+          }))
+        : [],
+      tours: Array.isArray(parsed.tours) ? parsed.tours : [],
+    };
+  } catch (error) {
+    return defaultDb;
+  }
+};
+
+const writeDb = (db) => {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+};
+
+const nextId = (items) => {
+  const maxId = items.reduce((max, item) => {
+    const value = Number(item.id);
+    return Number.isFinite(value) && value > max ? value : max;
+  }, 0);
+  return maxId + 1;
+};
+
+const normalizeTour = (tour) => ({
+  ...tour,
+  title: String(tour.title || '').trim(),
+  description: String(tour.description || '').trim(),
+  duration: String(tour.duration || '').trim(),
+  location: String(tour.location || '').trim(),
+  image: String(tour.image || '').trim(),
+  price: Number(tour.price) || 0,
+});
+
+const sanitizeUser = (user) => {
+  if (!user) return null;
+
+  const { password, ...safeUser } = user;
+  return {
+    ...safeUser,
+    favorites: Array.isArray(safeUser.favorites) ? safeUser.favorites : [],
+  };
+};
+
+const aiRateLimit = new Map();
+
+const isAiRateLimited = (ip) => {
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  const maxRequests = 15;
+  const history = aiRateLimit.get(ip) || [];
+  const recent = history.filter((time) => now - time < windowMs);
+
+  if (recent.length >= maxRequests) {
+    aiRateLimit.set(ip, recent);
+    return true;
+  }
+
+  recent.push(now);
+  aiRateLimit.set(ip, recent);
+  return false;
+};
+
+const formatTourForAssistant = (tour) => {
+  const price = tour.price ? `${tour.price} KGS` : 'цена по запросу';
+  return `- ${tour.title}: ${tour.location || 'направление уточняется'}, ${tour.duration || 'длительность уточняется'}, ${price}. ${tour.description || ''}`;
+};
+
+const buildPremiumTravelPayPrompt = ({ message, profile = '', favorites = '[]', tours = [] }) => {
+  const toursInfo = tours.slice(0, 20).map(formatTourForAssistant).join('\n');
+
+  return `
+Ты — премиальный AI-ассистент платформы TravelPay.
+
+Твоя задача — помогать пользователям с поиском туров, бронированием, оплатой,
+возвратами, статусами платежей, безопасностью аккаунта, рекомендациями
+путешествий и поддержкой клиентов.
+
+Ты должен вести себя как живой premium travel-консьерж, а не как обычный бот.
+Ты можешь отвечать на любые общие вопросы пользователя, если это не требует
+выдумывать реальные платежи, бронирования, цены, документы или действия системы.
+
+Стиль общения:
+- отвечай дружелюбно и уверенно;
+- пиши естественно, как человек;
+- не отвечай слишком длинно;
+- используй понятный язык;
+- будь современным и энергичным;
+- иногда задавай уточняющие вопросы;
+- помогай пользователю дойти до результата;
+- не используй сухие AI-фразы;
+- не говори "как искусственный интеллект";
+- не говори "я не имею доступа", вместо этого мягко объясняй ограничения.
+
+Поведение:
+- если пользователь ищет тур, спроси бюджет, даты, направление и количество человек;
+- если хочет оплатить, объясни шаги оплаты;
+- если спрашивает статус, попроси payment ID или номер бронирования;
+- если хочет возврат, объясни процесс возврата и попроси номер бронирования/payment ID;
+- если не знает куда поехать, предложи варианты под сезон, бюджет и стиль отдыха;
+- если злится, отвечай спокойно и профессионально;
+- если пишет коротко, отвечай коротко;
+- если пишет подробно, отвечай подробнее.
+
+Важные правила:
+- никогда не выдумывай платежи;
+- никогда не придумывай бронирования;
+- не придумывай цены;
+- не обещай то, чего система не умеет;
+- если информации недостаточно, задай вопрос;
+- если запрос связан с аккаунтом, попроси уточняющие данные;
+- цены называй только из базы TravelPay, иначе говори "цену нужно уточнить";
+- если вопрос не про TravelPay или туризм, всё равно помоги кратко и полезно.
+
+Ты хорошо разбираешься в путешествиях, популярных направлениях, авиаперелетах,
+отелях, визах, страховании, бронировании туров, семейном отдыхе, luxury travel
+и бюджетных поездках.
+
+Тон бренда TravelPay: premium, минимализм, технологичность, удобство,
+безопасность, быстрое бронирование и онлайн-оплата.
+
+Отвечай на языке пользователя: RU, KG или EN.
+
+Профиль пользователя:
+${profile || 'Нет данных'}
+
+Избранные туры:
+${favorites || '[]'}
+
+Туры из базы TravelPay:
+${toursInfo || 'Пока нет туров в базе.'}
+
+Вопрос пользователя:
+${message}
+`;
+};
+
+const buildOpenAiMessages = (context) => [
+  {
+    role: 'system',
+    content: buildPremiumTravelPayPrompt(context),
+  },
+  {
+    role: 'user',
+    content: context.message,
+  },
+];
+
+const askOpenAi = async (context) => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey === 'YOUR_OPENAI_API_KEY') return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        messages: buildOpenAiMessages(context),
+        temperature: 0.7,
+        max_tokens: 900,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI status ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data?.choices?.[0]?.message?.content?.trim() || null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const askGemini = async (context) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY') return null;
+
+  const { GoogleGenAI } = await import('@google/genai');
+  const ai = new GoogleGenAI({ apiKey });
+  const response = await ai.models.generateContent({
+    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    contents: buildPremiumTravelPayPrompt(context),
+  });
+
+  return response.text || null;
+};
+
+const premiumOfflineReply = (message, tours) => {
+  const query = String(message || '').toLowerCase();
+  const wantsPayment = query.includes('payment') || query.includes('оплат') || query.includes('платеж') || query.includes('платёж');
+  const wantsRefund = query.includes('возврат') || query.includes('refund') || query.includes('вернуть');
+  const wantsStatus = query.includes('статус') || query.includes('где мой платеж') || query.includes('где мой платёж');
+
+  if (wantsStatus || wantsPayment) {
+    return 'Я помогу проверить оплату. Отправьте, пожалуйста, payment ID или номер бронирования — без этих данных статус лучше не угадывать.';
+  }
+
+  if (wantsRefund) {
+    return 'Помогу с возвратом. Обычно нужно отправить заявку, затем TravelPay проверяет оплату и условия тарифа/партнёра. Пришлите номер бронирования или payment ID — подскажу следующий шаг.';
+  }
+
+  const recommendedTours = tours.slice(0, 3).map(formatTourForAssistant).join('\n');
+
+  if (recommendedTours) {
+    return `Отлично, подберём комфортный вариант. Подскажите направление, даты, количество человек и примерный бюджет.\n\nСейчас в базе TravelPay есть:\n${recommendedTours}`;
+  }
+
+  return 'Отлично, подберём поездку под вас. Подскажите, пожалуйста: куда хотите поехать, даты, сколько человек и примерный бюджет?';
+};
+
+app.get('/health', (req, res) => {
+  res.json({ ok: true, service: 'TravelPay API' });
+});
+
+app.post('/api/ai-assistant', async (req, res) => {
+  try {
+    if (isAiRateLimited(req.ip || req.socket.remoteAddress || 'local')) {
+      return res.status(429).json({ error: 'Too many AI requests. Please try again in a minute.' });
+    }
+
+    const message = String(req.body.message || '').trim();
+    const profile = req.body.profile || '';
+    const favorites = req.body.favorites || '[]';
+    const { tours } = readDb();
+
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const aiContext = { message, profile, favorites, tours };
+    const hasOpenAi = process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'YOUR_OPENAI_API_KEY';
+    const hasGemini = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'YOUR_GEMINI_API_KEY';
+
+    if (!hasOpenAi && !hasGemini) {
+      const answer = premiumOfflineReply(message, tours);
+      return res.status(200).json({ answer, reply: answer, provider: 'offline' });
+    }
+
+    const openAiAnswer = await askOpenAi(aiContext);
+    if (openAiAnswer) {
+      return res.status(200).json({ answer: openAiAnswer, reply: openAiAnswer, provider: 'openai' });
+    }
+
+    const geminiAnswer = await askGemini(aiContext);
+    if (geminiAnswer) {
+      return res.status(200).json({ answer: geminiAnswer, reply: geminiAnswer, provider: 'gemini' });
+    }
+
+    const answer = premiumOfflineReply(message, tours);
+    return res.status(200).json({ answer, reply: answer, provider: 'offline' });
+  } catch (error) {
+    console.error('AI assistant error:', error);
+    const { tours } = readDb();
+    const answer = premiumOfflineReply(req.body?.message, tours);
+    return res.status(200).json({ answer, reply: answer, provider: 'offline', warning: 'AI provider unavailable' });
+  }
+});
+
+app.get('/tours', (req, res) => {
+  res.json(readDb().tours);
+});
+
+app.post('/auth/login', (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
+  const db = readDb();
+  const user = db.users.find(
+    (item) => String(item.email).toLowerCase() === email && String(item.password) === password,
+  );
+
+  if (!user) {
+    return res.status(401).json({ message: 'Неверный email или пароль.' });
+  }
+
+  res.json(sanitizeUser({ ...user, isLoggedIn: true }));
+});
+
+app.post('/tours', (req, res) => {
+  const db = readDb();
+  const tour = normalizeTour({ ...req.body, id: nextId(db.tours) });
+
+  if (!tour.title || !tour.description || !tour.image || !tour.price) {
+    return res.status(400).json({ message: 'Р—Р°РїРѕР»РЅРёС‚Рµ РЅР°Р·РІР°РЅРёРµ, РѕРїРёСЃР°РЅРёРµ, С†РµРЅСѓ Рё РєР°СЂС‚РёРЅРєСѓ С‚СѓСЂР°.' });
+  }
+
+  db.tours.push(tour);
+  writeDb(db);
+  res.status(201).json(tour);
+});
+
+app.put('/tours/:id', (req, res) => {
+  const db = readDb();
+  const id = Number(req.params.id);
+  const index = db.tours.findIndex((tour) => Number(tour.id) === id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: 'РўСѓСЂ РЅРµ РЅР°Р№РґРµРЅ.' });
+  }
+
+  db.tours[index] = normalizeTour({ ...db.tours[index], ...req.body, id });
+  writeDb(db);
+  res.json(db.tours[index]);
+});
+
+app.delete('/tours/:id', (req, res) => {
+  const db = readDb();
+  const id = Number(req.params.id);
+  const nextTours = db.tours.filter((tour) => Number(tour.id) !== id);
+
+  if (nextTours.length === db.tours.length) {
+    return res.status(404).json({ message: 'РўСѓСЂ РЅРµ РЅР°Р№РґРµРЅ.' });
+  }
+
+  db.tours = nextTours;
+  writeDb(db);
+  res.status(204).end();
+});
+
+app.get('/users', (req, res) => {
+  const { email } = req.query;
+  const users = readDb().users;
+  const result = email
+    ? users.filter((user) => String(user.email).toLowerCase() === String(email).toLowerCase())
+    : users;
+
+  res.json(result.map(sanitizeUser));
+});
+
+app.get('/users/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const user = readDb().users.find((item) => Number(item.id) === id);
+
+  if (!user) {
+    return res.status(404).json({ message: 'Пользователь не найден.' });
+  }
+
+  res.json(sanitizeUser(user));
+});
+
+app.post('/users', (req, res) => {
+  const db = readDb();
+  const email = String(req.body.email || '').trim().toLowerCase();
+
+  if (!req.body.name || !email || !req.body.password) {
+    return res.status(400).json({ message: 'РРјСЏ, email Рё РїР°СЂРѕР»СЊ РѕР±СЏР·Р°С‚РµР»СЊРЅС‹.' });
+  }
+
+  if (db.users.some((user) => String(user.email).toLowerCase() === email)) {
+    return res.status(409).json({ message: 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ СЃ С‚Р°РєРёРј email СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚.' });
+  }
+
+  const user = {
+    id: nextId(db.users),
+    name: String(req.body.name).trim(),
+    email,
+    password: String(req.body.password),
+    balance: Number(req.body.balance) || 0,
+    avatar: req.body.avatar || 'https://www.w3schools.com/howto/img_avatar.png',
+    role: req.body.role || 'user',
+    isLoggedIn: true,
+    favorites: Array.isArray(req.body.favorites) ? req.body.favorites : [],
+  };
+
+  db.users.push(user);
+  writeDb(db);
+  res.status(201).json(sanitizeUser(user));
+});
+
+app.put('/users/:id', (req, res) => {
+  const db = readDb();
+  const id = Number(req.params.id);
+  const index = db.users.findIndex((user) => Number(user.id) === id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.' });
+  }
+
+  db.users[index] = {
+    ...db.users[index],
+    ...req.body,
+    id,
+    balance: Number(req.body.balance ?? db.users[index].balance) || 0,
+    favorites: Array.isArray(req.body.favorites) ? req.body.favorites : db.users[index].favorites,
+  };
+
+  writeDb(db);
+  res.json(sanitizeUser(db.users[index]));
+});
+
+app.put('/users/:id/favorites', (req, res) => {
+  const db = readDb();
+  const id = Number(req.params.id);
+  const index = db.users.findIndex((user) => Number(user.id) === id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: 'Пользователь не найден.' });
+  }
+
+  db.users[index] = {
+    ...db.users[index],
+    favorites: Array.isArray(req.body.favorites) ? req.body.favorites : [],
+  };
+
+  writeDb(db);
+  res.json(sanitizeUser(db.users[index]));
+});
+
+app.delete('/users/:id', (req, res) => {
+  const db = readDb();
+  const id = Number(req.params.id);
+  const nextUsers = db.users.filter((user) => Number(user.id) !== id);
+
+  if (nextUsers.length === db.users.length) {
+    return res.status(404).json({ message: 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.' });
+  }
+
+  db.users = nextUsers;
+  writeDb(db);
+  res.status(204).end();
+});
+
+const detectLanguage = (message) => {
+  const text = String(message || '').toLowerCase();
+  if (/[үңөқғһ]/i.test(text)) return 'KG';
+  if (/[а-яё]/i.test(text)) return 'RU';
+  return 'EN';
+};
+
+app.post('/api/chat', async (req, res) => {
+  const message = String(req.body.message || '').trim();
+  const { tours } = readDb();
+
+  if (!message) {
+    return res.json({ reply: 'Напишите направление, даты, количество путешественников и примерный бюджет — подберу лучший вариант.' });
+  }
+
+  const profile = req.body.profile || '';
+  const favorites = req.body.favorites || '[]';
+  const aiContext = { message, profile, favorites, tours };
+  try {
+    const openAiAnswer = await askOpenAi(aiContext);
+    if (openAiAnswer) {
+      return res.json({ reply: openAiAnswer, provider: 'openai' });
+    }
+
+    const geminiAnswer = await askGemini(aiContext);
+    if (geminiAnswer) {
+      return res.json({ reply: geminiAnswer, provider: 'gemini' });
+    }
+
+    const prompt = buildPremiumTravelPayPrompt(aiContext);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
+    const response = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.OLLAMA_MODEL || 'qwen3:8b',
+        prompt,
+        stream: false,
+        options: { temperature: 0.6 },
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`Ollama status ${response.status}`);
+    }
+
+    const data = await response.json();
+    const reply = data.response || premiumOfflineReply(message, tours);
+    return res.json({ reply });
+  } catch (error) {
+    return res.json({ reply: premiumOfflineReply(message, tours) });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`TravelPay API is running on http://localhost:${PORT}`);
+});
+
+

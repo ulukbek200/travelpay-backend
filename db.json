@@ -6,31 +6,58 @@
       "email": "uluk@gmail.com",
       "password": "1234",
       "balance": 100,
+      "role": "admin",
+      "avatar": "https://www.w3schools.com/howto/img_avatar.png",
       "isLoggedIn": false
     },
     {
-      "name": "Ulukbek",
-      "email": "uluk09@gmail.com",
-      "password": "1234",
+      "id": 2,
+      "name": "Анастасия",
+      "email": "anya@gmail.com",
+      "password": "27022007",
       "balance": 0,
-      "isLoggedIn": true,
-      "id": 2
+      "avatar": "https://www.w3schools.com/howto/img_avatar.png",
+      "role": "user",
+      "isLoggedIn": true
     },
     {
-      "name": "Maga",
-      "email": "Auf@gmail.com",
-      "password": "12345",
+      "id": 3,
+      "name": "Ulukbek Monolov",
+      "email": "ulukbekmonolov07@gmail.com",
+      "password": "123456",
       "balance": 0,
-      "isLoggedIn": true,
-      "id": 3
+      "avatar": "https://www.w3schools.com/howto/img_avatar.png",
+      "role": "user",
+      "isLoggedIn": true
+    }
+  ],
+  "tours": [
+    {
+      "title": "Тур на Иссык-Куль",
+      "location": "Каракол",
+      "duration": "5",
+      "price": 14000,
+      "image": "https://skigu.ru/upload/iblock/182/182330ad330cd623efe07bf0fa1e7973.jpg",
+      "description": "Веселый тур с колективом",
+      "id": 1779357386150
     },
     {
-      "name": "uluk",
-      "email": "uluk01@gmail.com",
-      "password": "12345",
-      "balance": 0,
-      "isLoggedIn": true,
-      "id": 4
+      "title": "Kolsay lakes",
+      "location": "Kol Say",
+      "duration": "3",
+      "price": 12000,
+      "image": "https://www.advantour.com/img/kazakhstan/images/kolsay-lakes.jpg",
+      "description": "Тур будет 3 дня туда включено все",
+      "id": 1779357386151
+    },
+    {
+      "title": "Тур в Нарын",
+      "location": "Нарын",
+      "duration": "4",
+      "price": 10000,
+      "image": "https://gallery.asiamixtravel.ru/narin/tash_rabad.webp",
+      "description": "тур в нарын",
+      "id": 1779357386152
     }
   ]
 }
