@@ -2,6 +2,7 @@
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const { MongoClient } = require('mongodb');
 
 const loadLocalEnv = () => {
   const envFiles = [
@@ -33,6 +34,9 @@ loadLocalEnv();
 const app = express();
 const PORT = process.env.PORT || 10000;
 const DB_FILE = path.join(__dirname, 'db.json');
+const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'travelpay';
+let mongoClientPromise;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -79,7 +83,54 @@ const ensureDb = () => {
   }
 };
 
-const readDb = () => {
+const stripMongoId = ({ _id, ...item }) => item;
+
+const getMongoDb = async () => {
+  if (!MONGODB_URI) return null;
+
+  if (!mongoClientPromise) {
+    const client = new MongoClient(MONGODB_URI);
+    mongoClientPromise = client.connect();
+  }
+
+  const client = await mongoClientPromise;
+  return client.db(MONGODB_DB_NAME);
+};
+
+const seedMongoIfEmpty = async (db) => {
+  const [usersCount, toursCount] = await Promise.all([
+    db.collection('users').countDocuments(),
+    db.collection('tours').countDocuments(),
+  ]);
+
+  if (!usersCount) {
+    await db.collection('users').insertMany(defaultDb.users);
+  }
+
+  if (!toursCount) {
+    await db.collection('tours').insertMany(defaultDb.tours);
+  }
+};
+
+const readDb = async () => {
+  const mongoDb = await getMongoDb();
+
+  if (mongoDb) {
+    await seedMongoIfEmpty(mongoDb);
+    const [users, tours] = await Promise.all([
+      mongoDb.collection('users').find({}).sort({ id: 1 }).toArray(),
+      mongoDb.collection('tours').find({}).sort({ id: 1 }).toArray(),
+    ]);
+
+    return {
+      users: users.map(stripMongoId).map((user) => ({
+        ...user,
+        favorites: Array.isArray(user.favorites) ? user.favorites : [],
+      })),
+      tours: tours.map(stripMongoId),
+    };
+  }
+
   ensureDb();
   try {
     const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
@@ -98,7 +149,37 @@ const readDb = () => {
 };
 
 const writeDb = (db) => {
+  if (process.env.VERCEL && !MONGODB_URI) {
+    throw new Error('Persistent storage is not configured. Set MONGODB_URI for deployed writes.');
+  }
+
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+};
+
+const saveDb = async (data) => {
+  const mongoDb = await getMongoDb();
+
+  if (!mongoDb) {
+    writeDb(data);
+    return;
+  }
+
+  const users = data.users.map(stripMongoId);
+  const tours = data.tours.map(stripMongoId);
+
+  await Promise.all([
+    mongoDb.collection('users').deleteMany({}),
+    mongoDb.collection('tours').deleteMany({}),
+  ]);
+
+  await Promise.all([
+    users.length ? mongoDb.collection('users').insertMany(users) : Promise.resolve(),
+    tours.length ? mongoDb.collection('tours').insertMany(tours) : Promise.resolve(),
+  ]);
+};
+
+const asyncHandler = (handler) => (req, res, next) => {
+  Promise.resolve(handler(req, res, next)).catch(next);
 };
 
 const nextId = (items) => {
@@ -309,7 +390,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'TravelPay API' });
 });
 
-app.post('/api/ai-assistant', async (req, res) => {
+app.post('/api/ai-assistant', asyncHandler(async (req, res) => {
   try {
     if (isAiRateLimited(req.ip || req.socket.remoteAddress || 'local')) {
       return res.status(429).json({ error: 'Too many AI requests. Please try again in a minute.' });
@@ -318,7 +399,7 @@ app.post('/api/ai-assistant', async (req, res) => {
     const message = String(req.body.message || '').trim();
     const profile = req.body.profile || '';
     const favorites = req.body.favorites || '[]';
-    const { tours } = readDb();
+    const { tours } = await readDb();
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
@@ -347,20 +428,21 @@ app.post('/api/ai-assistant', async (req, res) => {
     return res.status(200).json({ answer, reply: answer, provider: 'offline' });
   } catch (error) {
     console.error('AI assistant error:', error);
-    const { tours } = readDb();
+    const { tours } = await readDb();
     const answer = premiumOfflineReply(req.body?.message, tours);
     return res.status(200).json({ answer, reply: answer, provider: 'offline', warning: 'AI provider unavailable' });
   }
-});
+}));
 
-app.get('/tours', (req, res) => {
-  res.json(readDb().tours);
-});
+app.get('/tours', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  res.json(db.tours);
+}));
 
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login', asyncHandler(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
-  const db = readDb();
+  const db = await readDb();
   const user = db.users.find(
     (item) => String(item.email).toLowerCase() === email && String(item.password) === password,
   );
@@ -370,10 +452,10 @@ app.post('/auth/login', (req, res) => {
   }
 
   res.json(sanitizeUser({ ...user, isLoggedIn: true }));
-});
+}));
 
-app.post('/tours', (req, res) => {
-  const db = readDb();
+app.post('/tours', asyncHandler(async (req, res) => {
+  const db = await readDb();
   const tour = normalizeTour({ ...req.body, id: nextId(db.tours) });
 
   if (!tour.title || !tour.description || !tour.image || !tour.price) {
@@ -381,12 +463,12 @@ app.post('/tours', (req, res) => {
   }
 
   db.tours.push(tour);
-  writeDb(db);
+  await saveDb(db);
   res.status(201).json(tour);
-});
+}));
 
-app.put('/tours/:id', (req, res) => {
-  const db = readDb();
+app.put('/tours/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
   const id = Number(req.params.id);
   const index = db.tours.findIndex((tour) => Number(tour.id) === id);
 
@@ -395,12 +477,12 @@ app.put('/tours/:id', (req, res) => {
   }
 
   db.tours[index] = normalizeTour({ ...db.tours[index], ...req.body, id });
-  writeDb(db);
+  await saveDb(db);
   res.json(db.tours[index]);
-});
+}));
 
-app.delete('/tours/:id', (req, res) => {
-  const db = readDb();
+app.delete('/tours/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
   const id = Number(req.params.id);
   const nextTours = db.tours.filter((tour) => Number(tour.id) !== id);
 
@@ -409,33 +491,34 @@ app.delete('/tours/:id', (req, res) => {
   }
 
   db.tours = nextTours;
-  writeDb(db);
+  await saveDb(db);
   res.status(204).end();
-});
+}));
 
-app.get('/users', (req, res) => {
+app.get('/users', asyncHandler(async (req, res) => {
   const { email } = req.query;
-  const users = readDb().users;
+  const { users } = await readDb();
   const result = email
     ? users.filter((user) => String(user.email).toLowerCase() === String(email).toLowerCase())
     : users;
 
   res.json(result.map(sanitizeUser));
-});
+}));
 
-app.get('/users/:id', (req, res) => {
+app.get('/users/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
-  const user = readDb().users.find((item) => Number(item.id) === id);
+  const { users } = await readDb();
+  const user = users.find((item) => Number(item.id) === id);
 
   if (!user) {
     return res.status(404).json({ message: 'Пользователь не найден.' });
   }
 
   res.json(sanitizeUser(user));
-});
+}));
 
-app.post('/users', (req, res) => {
-  const db = readDb();
+app.post('/users', asyncHandler(async (req, res) => {
+  const db = await readDb();
   const email = String(req.body.email || '').trim().toLowerCase();
 
   if (!req.body.name || !email || !req.body.password) {
@@ -459,12 +542,12 @@ app.post('/users', (req, res) => {
   };
 
   db.users.push(user);
-  writeDb(db);
+  await saveDb(db);
   res.status(201).json(sanitizeUser(user));
-});
+}));
 
-app.put('/users/:id', (req, res) => {
-  const db = readDb();
+app.put('/users/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
   const id = Number(req.params.id);
   const index = db.users.findIndex((user) => Number(user.id) === id);
 
@@ -480,12 +563,12 @@ app.put('/users/:id', (req, res) => {
     favorites: Array.isArray(req.body.favorites) ? req.body.favorites : db.users[index].favorites,
   };
 
-  writeDb(db);
+  await saveDb(db);
   res.json(sanitizeUser(db.users[index]));
-});
+}));
 
-app.put('/users/:id/favorites', (req, res) => {
-  const db = readDb();
+app.put('/users/:id/favorites', asyncHandler(async (req, res) => {
+  const db = await readDb();
   const id = Number(req.params.id);
   const index = db.users.findIndex((user) => Number(user.id) === id);
 
@@ -498,12 +581,12 @@ app.put('/users/:id/favorites', (req, res) => {
     favorites: Array.isArray(req.body.favorites) ? req.body.favorites : [],
   };
 
-  writeDb(db);
+  await saveDb(db);
   res.json(sanitizeUser(db.users[index]));
-});
+}));
 
-app.delete('/users/:id', (req, res) => {
-  const db = readDb();
+app.delete('/users/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
   const id = Number(req.params.id);
   const nextUsers = db.users.filter((user) => Number(user.id) !== id);
 
@@ -512,9 +595,9 @@ app.delete('/users/:id', (req, res) => {
   }
 
   db.users = nextUsers;
-  writeDb(db);
+  await saveDb(db);
   res.status(204).end();
-});
+}));
 
 const detectLanguage = (message) => {
   const text = String(message || '').toLowerCase();
@@ -523,9 +606,9 @@ const detectLanguage = (message) => {
   return 'EN';
 };
 
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', asyncHandler(async (req, res) => {
   const message = String(req.body.message || '').trim();
-  const { tours } = readDb();
+  const { tours } = await readDb();
 
   if (!message) {
     return res.json({ reply: 'Напишите направление, даты, количество путешественников и примерный бюджет — подберу лучший вариант.' });
@@ -573,10 +656,25 @@ app.post('/api/chat', async (req, res) => {
   } catch (error) {
     return res.json({ reply: premiumOfflineReply(message, tours) });
   }
+}));
+
+app.use((error, req, res, next) => {
+  console.error('API error:', error);
+  const isStorageError = error.message?.includes('Persistent storage');
+
+  res.status(500).json({
+    message: isStorageError
+      ? 'Backend storage is not configured. Add MONGODB_URI in deployment environment variables.'
+      : 'Internal server error',
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`TravelPay API is running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`TravelPay API is running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
 
 
