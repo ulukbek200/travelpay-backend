@@ -38,6 +38,16 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'travelpay';
 let mongoClientPromise;
 
+class StorageUnavailableError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'StorageUnavailableError';
+    this.statusCode = options.statusCode || 503;
+    this.code = options.code || 'STORAGE_UNAVAILABLE';
+    this.cause = options.cause;
+  }
+}
+
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
@@ -85,16 +95,44 @@ const ensureDb = () => {
 
 const stripMongoId = ({ _id, ...item }) => item;
 
-const getMongoDb = async () => {
+const isMongoConnectionError = (error) => {
+  const message = error?.message?.toLowerCase() || '';
+  const name = error?.name || '';
+
+  return (
+    name.includes('Mongo') ||
+    message.includes('mongodb') ||
+    message.includes('querysrv') ||
+    message.includes('authentication failed') ||
+    message.includes('bad auth') ||
+    message.includes('server selection')
+  );
+};
+
+const getMongoDb = async ({ allowFallback = false } = {}) => {
   if (!MONGODB_URI) return null;
 
-  if (!mongoClientPromise) {
-    const client = new MongoClient(MONGODB_URI);
-    mongoClientPromise = client.connect();
-  }
+  try {
+    if (!mongoClientPromise) {
+      const client = new MongoClient(MONGODB_URI);
+      mongoClientPromise = client.connect();
+    }
 
-  const client = await mongoClientPromise;
-  return client.db(MONGODB_DB_NAME);
+    const client = await mongoClientPromise;
+    return client.db(MONGODB_DB_NAME);
+  } catch (error) {
+    mongoClientPromise = null;
+
+    if (allowFallback) {
+      console.error('MongoDB unavailable, falling back to local db for read-only operations:', error);
+      return null;
+    }
+
+    throw new StorageUnavailableError(
+      'Database connection failed. Check MONGODB_URI, MongoDB user password, and Network Access in MongoDB Atlas.',
+      { code: 'DATABASE_UNAVAILABLE', cause: error },
+    );
+  }
 };
 
 const seedMongoIfEmpty = async (db) => {
@@ -113,7 +151,7 @@ const seedMongoIfEmpty = async (db) => {
 };
 
 const readDb = async () => {
-  const mongoDb = await getMongoDb();
+  const mongoDb = await getMongoDb({ allowFallback: true });
 
   if (mongoDb) {
     await seedMongoIfEmpty(mongoDb);
@@ -150,7 +188,10 @@ const readDb = async () => {
 
 const writeDb = (db) => {
   if (process.env.VERCEL && !MONGODB_URI) {
-    throw new Error('Persistent storage is not configured. Set MONGODB_URI for deployed writes.');
+    throw new StorageUnavailableError(
+      'Persistent storage is not configured. Set MONGODB_URI for deployed writes.',
+      { code: 'PERSISTENT_STORAGE_UNAVAILABLE' },
+    );
   }
 
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
@@ -660,20 +701,20 @@ app.post('/api/chat', asyncHandler(async (req, res) => {
 
 app.use((error, req, res, next) => {
   console.error('API error:', error);
-  const isStorageError = error.message?.includes('Persistent storage');
-  const isMongoError = (
-    error.name?.includes('Mongo') ||
-    error.message?.toLowerCase().includes('mongodb') ||
-    error.message?.toLowerCase().includes('querysrv') ||
-    error.message?.toLowerCase().includes('authentication failed') ||
-    error.message?.toLowerCase().includes('bad auth') ||
-    error.message?.toLowerCase().includes('server selection')
-  );
+  const isStorageError = error instanceof StorageUnavailableError;
+  const isMongoError = isMongoConnectionError(error) || isMongoConnectionError(error?.cause);
+  const statusCode = error.statusCode || (isStorageError || isMongoError ? 503 : 500);
 
-  res.status(500).json({
-    message: isStorageError || isMongoError
-      ? 'Database connection failed. Check MONGODB_URI, MongoDB user password, and Network Access in MongoDB Atlas.'
-      : 'Internal server error',
+  if (isStorageError || isMongoError) {
+    return res.status(statusCode).json({
+      code: error.code || 'DATABASE_UNAVAILABLE',
+      message: 'База данных временно недоступна. Проверьте MONGODB_URI, пароль пользователя MongoDB и Network Access в MongoDB Atlas.',
+    });
+  }
+
+  res.status(statusCode).json({
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'Internal server error',
   });
 });
 
