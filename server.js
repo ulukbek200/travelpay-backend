@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
+const aiChatRoute = require('./routes/aiChat');
 
 const loadLocalEnv = () => {
   const envFiles = [
@@ -37,6 +38,7 @@ const DB_FILE = path.join(__dirname, 'db.json');
 const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'travelpay';
 let mongoClientPromise;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 class StorageUnavailableError extends Error {
   constructor(message, options = {}) {
@@ -50,6 +52,7 @@ class StorageUnavailableError extends Error {
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+app.use(aiChatRoute);
 
 const defaultDb = {
   users: [
@@ -63,6 +66,15 @@ const defaultDb = {
       avatar: 'https://www.w3schools.com/howto/img_avatar.png',
       isLoggedIn: true,
       favorites: [],
+      savings: {
+        goalAmount: 0,
+        currentAmount: 0,
+        durationMonths: 0,
+        startDate: '',
+        endDate: '',
+        monthlyPayment: 0,
+        status: 'cancelled',
+      },
     },
   ],
   tours: [
@@ -161,10 +173,7 @@ const readDb = async () => {
     ]);
 
     return {
-      users: users.map(stripMongoId).map((user) => ({
-        ...user,
-        favorites: Array.isArray(user.favorites) ? user.favorites : [],
-      })),
+      users: users.map(stripMongoId).map(normalizeUser),
       tours: tours.map(stripMongoId),
     };
   }
@@ -174,10 +183,7 @@ const readDb = async () => {
     const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     return {
       users: Array.isArray(parsed.users)
-        ? parsed.users.map((user) => ({
-            ...user,
-            favorites: Array.isArray(user.favorites) ? user.favorites : [],
-          }))
+        ? parsed.users.map(normalizeUser)
         : [],
       tours: Array.isArray(parsed.tours) ? parsed.tours : [],
     };
@@ -241,14 +247,210 @@ const normalizeTour = (tour) => ({
   price: Number(tour.price) || 0,
 });
 
+const normalizeSavings = (savings) => {
+  if (!savings || typeof savings !== 'object') {
+    return {
+      goalAmount: 0,
+      currentAmount: 0,
+      durationMonths: 0,
+      startDate: '',
+      endDate: '',
+      monthlyPayment: 0,
+      status: 'cancelled',
+    };
+  }
+
+  const goalAmount = Number(savings.goalAmount) || 0;
+  const currentAmount = Number(savings.currentAmount) || 0;
+  const durationMonths = Number(savings.durationMonths) || 0;
+  const monthlyPayment = Number(savings.monthlyPayment) || 0;
+  const startDate = savings.startDate ? new Date(savings.startDate).toISOString() : '';
+  const endDate = savings.endDate ? new Date(savings.endDate).toISOString() : '';
+  let status = savings.status || 'cancelled';
+
+  if (!goalAmount || !durationMonths || !startDate) {
+    status = 'cancelled';
+  } else if (currentAmount >= goalAmount) {
+    status = 'completed';
+  } else if (endDate && new Date(endDate).getTime() < Date.now()) {
+    status = 'expired';
+  } else if (status !== 'cancelled') {
+    status = 'active';
+  }
+
+  return {
+    goalAmount,
+    currentAmount,
+    durationMonths,
+    startDate,
+    endDate,
+    monthlyPayment,
+    status,
+  };
+};
+
+const ensureArray = (value) => (Array.isArray(value) ? value : []);
+const normalizeString = (value, fallback = '') => String(value || fallback).trim();
+const normalizeDateValue = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+};
+const createId = (prefix = 'id') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const normalizeTopUp = (entry) => ({
+  id: entry?.id || createId('topup'),
+  date: normalizeDateValue(entry?.date) || new Date().toISOString(),
+  amount: Number(entry?.amount) || 0,
+  status: normalizeString(entry?.status, 'completed') || 'completed',
+  source: normalizeString(entry?.source, 'manual') || 'manual',
+});
+
+const normalizeBooking = (booking) => ({
+  id: booking?.id || createId('booking'),
+  tourId: booking?.tourId || booking?.id || '',
+  tourTitle: normalizeString(booking?.tourTitle || booking?.title),
+  location: normalizeString(booking?.location),
+  image: normalizeString(booking?.image),
+  amount: Number(booking?.amount) || Number(booking?.price) || 0,
+  status: normalizeString(booking?.status, 'paid') || 'paid',
+  purchasedAt: normalizeDateValue(booking?.purchasedAt || booking?.date) || new Date().toISOString(),
+  travelDate: normalizeDateValue(booking?.travelDate) || '',
+  paymentMethod: normalizeString(booking?.paymentMethod, 'savings') || 'savings',
+});
+
+const normalizeNotification = (item) => ({
+  id: item?.id || createId('notification'),
+  type: normalizeString(item?.type, 'info') || 'info',
+  title: normalizeString(item?.title, 'Уведомление') || 'Уведомление',
+  description: normalizeString(item?.description),
+  date: normalizeDateValue(item?.date) || new Date().toISOString(),
+  read: Boolean(item?.read),
+});
+
+const normalizeChallenge = (item) => ({
+  id: item?.id || 'challenge-20000-30',
+  title: normalizeString(item?.title, 'Накопить 20 000 сом за 30 дней') || 'Накопить 20 000 сом за 30 дней',
+  targetAmount: Number(item?.targetAmount) || 20000,
+  periodDays: Number(item?.periodDays) || 30,
+  startDate: normalizeDateValue(item?.startDate) || new Date().toISOString(),
+  completed: Boolean(item?.completed),
+  rewardTitle: normalizeString(item?.rewardTitle, 'Challenge completed') || 'Challenge completed',
+});
+
+const normalizeBonusWheel = (bonusWheel) => ({
+  lastSpinDate: normalizeDateValue(bonusWheel?.lastSpinDate),
+  availableAt: normalizeDateValue(bonusWheel?.availableAt),
+  history: ensureArray(bonusWheel?.history).map((entry) => ({
+    id: entry?.id || createId('bonus'),
+    rewardType: normalizeString(entry?.rewardType, 'bonus_som') || 'bonus_som',
+    rewardValue: Number(entry?.rewardValue) || 0,
+    label: normalizeString(entry?.label, '100 сом') || '100 сом',
+    date: normalizeDateValue(entry?.date) || new Date().toISOString(),
+  })),
+});
+
+const normalizeReferral = (referral, user) => {
+  const baseCode = normalizeString(referral?.code || user?.email || user?.name || `travelpay-${user?.id || 'user'}`)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24) || `travelpay-${user?.id || 'user'}`;
+
+  const invitedCount = Number(referral?.invitedCount) || ensureArray(referral?.invitedUsers).length || 0;
+  const bonusAmount = Number(referral?.bonusAmount) || invitedCount * 1000;
+
+  return {
+    code: baseCode,
+    link: `https://travelpay.app/ref/${baseCode}`,
+    invitedCount,
+    bonusAmount,
+    invitedUsers: ensureArray(referral?.invitedUsers).map((entry) => ({
+      email: normalizeString(entry?.email),
+      joinedAt: normalizeDateValue(entry?.joinedAt) || new Date().toISOString(),
+    })),
+  };
+};
+
+const deriveLevel = (amount) => {
+  if (amount >= 150000) return 'Platinum';
+  if (amount >= 100000) return 'Gold';
+  if (amount >= 50000) return 'Silver';
+  return 'Bronze';
+};
+
+const normalizeUser = (user) => {
+  if (!user) return null;
+
+  const savings = normalizeSavings(user.savings);
+  const topUps = ensureArray(user.topUps).map(normalizeTopUp).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const travelHistory = ensureArray(user.travelHistory || user.bookings).map(normalizeBooking).sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt));
+  const notifications = ensureArray(user.notifications).map(normalizeNotification).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const challenges = ensureArray(user.challenges).length
+    ? ensureArray(user.challenges).map(normalizeChallenge)
+    : [normalizeChallenge()];
+  const bonusWheel = normalizeBonusWheel(user.bonusWheel);
+  const referral = normalizeReferral(user.referral, user);
+
+  const topUpTotal = topUps.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0);
+  const currentAmount = Number(savings.currentAmount) || 0;
+  const level = user.level || deriveLevel(Math.max(currentAmount, topUpTotal));
+
+  const streakMonths = topUps.reduce((max, entry) => {
+    const diffDays = Math.max(Math.floor((Date.now() - new Date(entry.date).getTime()) / DAY_MS), 0);
+    return diffDays <= 120 ? Math.max(max, 1 + Math.floor((120 - diffDays) / 30)) : max;
+  }, 0);
+
+  const challenge = challenges[0];
+  const challengeDeadline = challenge?.startDate
+    ? new Date(new Date(challenge.startDate).getTime() + challenge.periodDays * DAY_MS)
+    : null;
+  const challengeCurrentAmount = topUps
+    .filter((entry) => challenge?.startDate && new Date(entry.date).getTime() >= new Date(challenge.startDate).getTime())
+    .reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0);
+  const challengeCompleted = challengeCurrentAmount >= (challenge?.targetAmount || 0);
+
+  const achievementSet = new Set(ensureArray(user.achievements).map((item) => normalizeString(item)));
+  if (currentAmount >= 10000) achievementSet.add('Первые 10 000 сом');
+  if (currentAmount >= 50000) achievementSet.add('Первые 50 000 сом');
+  if (savings.status === 'completed') achievementSet.add('Цель достигнута');
+  if (travelHistory.length > 0) achievementSet.add('Первая поездка');
+  if (challengeCompleted) achievementSet.add(challenge.rewardTitle);
+
+  return {
+    ...user,
+    name: normalizeString(user.name),
+    email: normalizeString(user.email).toLowerCase(),
+    phone: normalizeString(user.phone),
+    role: normalizeString(user.role, 'user') || 'user',
+    avatar: normalizeString(user.avatar, 'https://www.w3schools.com/howto/img_avatar.png') || 'https://www.w3schools.com/howto/img_avatar.png',
+    favorites: ensureArray(user.favorites),
+    balance: Number(user.balance) || 0,
+    savings,
+    topUps,
+    travelHistory,
+    bookings: travelHistory,
+    notifications,
+    referral,
+    bonusWheel,
+    challenges: challenges.map((item, index) => (index === 0 ? {
+      ...item,
+      currentAmount: challengeCurrentAmount,
+      deadline: challengeDeadline ? challengeDeadline.toISOString() : '',
+      completed: item.completed || challengeCompleted,
+    } : item)),
+    achievements: Array.from(achievementSet),
+    level,
+    travelStreakMonths: Math.max(Number(user.travelStreakMonths) || 0, streakMonths),
+  };
+};
+
 const sanitizeUser = (user) => {
   if (!user) return null;
 
-  const { password, ...safeUser } = user;
-  return {
-    ...safeUser,
-    favorites: Array.isArray(safeUser.favorites) ? safeUser.favorites : [],
-  };
+  const normalizedUser = normalizeUser(user);
+  const { password, ...safeUser } = normalizedUser;
+  return safeUser;
 };
 
 const aiRateLimit = new Map();
@@ -302,6 +504,10 @@ const buildPremiumTravelPayPrompt = ({ message, profile = '', favorites = '[]', 
 - не говори "я не имею доступа", вместо этого мягко объясняй ограничения.
 
 Поведение:
+- если пользователь спрашивает про накопления, анализируй goalAmount, currentAmount, durationMonths, monthlyPayment, endDate и topUps из профиля;
+- умей считать, через сколько месяцев будет достигнута цель, если пользователь назвал сумму ежемесячного пополнения;
+- если пользователь спрашивает, какие туры доступны сейчас, сравни currentAmount накоплений с ценами туров из базы;
+- если пользователь спрашивает, сколько осталось до цели, считай остаток и подсказывай, какой взнос нужен до конца года или до конца срока;
 - если пользователь ищет тур, спроси бюджет, даты, направление и количество человек;
 - если хочет оплатить, объясни шаги оплаты;
 - если спрашивает статус, попроси payment ID или номер бронирования;
@@ -316,6 +522,7 @@ const buildPremiumTravelPayPrompt = ({ message, profile = '', favorites = '[]', 
 - никогда не придумывай бронирования;
 - не придумывай цены;
 - не обещай то, чего система не умеет;
+- если считаешь рекомендации по накоплениям, явно показывай формулу и вывод коротко;
 - если информации недостаточно, задай вопрос;
 - если запрос связан с аккаунтом, попроси уточняющие данные;
 - цены называй только из базы TravelPay, иначе говори "цену нужно уточнить";
@@ -570,7 +777,7 @@ app.post('/users', asyncHandler(async (req, res) => {
     return res.status(409).json({ message: 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ СЃ С‚Р°РєРёРј email СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚.' });
   }
 
-  const user = {
+  const user = normalizeUser({
     id: nextId(db.users),
     name: String(req.body.name).trim(),
     email,
@@ -580,7 +787,16 @@ app.post('/users', asyncHandler(async (req, res) => {
     role: req.body.role || 'user',
     isLoggedIn: true,
     favorites: Array.isArray(req.body.favorites) ? req.body.favorites : [],
-  };
+    savings: normalizeSavings(req.body.savings),
+    topUps: req.body.topUps,
+    notifications: req.body.notifications,
+    achievements: req.body.achievements,
+    referral: req.body.referral,
+    bonusWheel: req.body.bonusWheel,
+    challenges: req.body.challenges,
+    travelHistory: req.body.travelHistory,
+    bookings: req.body.bookings,
+  });
 
   db.users.push(user);
   await saveDb(db);
@@ -596,13 +812,14 @@ app.put('/users/:id', asyncHandler(async (req, res) => {
     return res.status(404).json({ message: 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.' });
   }
 
-  db.users[index] = {
+  db.users[index] = normalizeUser({
     ...db.users[index],
     ...req.body,
     id,
     balance: Number(req.body.balance ?? db.users[index].balance) || 0,
     favorites: Array.isArray(req.body.favorites) ? req.body.favorites : db.users[index].favorites,
-  };
+    savings: normalizeSavings(req.body.savings ?? db.users[index].savings),
+  });
 
   await saveDb(db);
   res.json(sanitizeUser(db.users[index]));
@@ -617,10 +834,10 @@ app.put('/users/:id/favorites', asyncHandler(async (req, res) => {
     return res.status(404).json({ message: 'Пользователь не найден.' });
   }
 
-  db.users[index] = {
+  db.users[index] = normalizeUser({
     ...db.users[index],
     favorites: Array.isArray(req.body.favorites) ? req.body.favorites : [],
-  };
+  });
 
   await saveDb(db);
   res.json(sanitizeUser(db.users[index]));
