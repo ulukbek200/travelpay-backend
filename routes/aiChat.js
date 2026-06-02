@@ -6,10 +6,6 @@ dotenv.config();
 
 const router = express.Router();
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
-
 router.post('/api/ai-chat', async (req, res) => {
   try {
     const { message, history = [] } = req.body || {};
@@ -18,11 +14,15 @@ router.post('/api/ai-chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'мой_ключ_сюда') {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey || apiKey === 'мой_ключ_сюда') {
       return res.status(500).json({
         reply: 'Сейчас ассистент временно недоступен, попробуйте позже.',
       });
     }
+
+    const ai = new GoogleGenAI({ apiKey });
 
     const systemPrompt = `
 Ты TravelPay AI — умный помощник платформы TravelPay.
@@ -50,7 +50,7 @@ TravelPay AI:
 `;
 
     const result = await ai.models.generateContent({
-      model: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
       contents: chatText,
     });
 
