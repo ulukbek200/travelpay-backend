@@ -1,6 +1,5 @@
 const express = require('express');
 const dotenv = require('dotenv');
-const { GoogleGenAI } = require('@google/genai');
 
 dotenv.config();
 
@@ -22,6 +21,7 @@ router.post('/api/ai-chat', async (req, res) => {
       });
     }
 
+    const { GoogleGenAI } = require('@google/genai');
     const ai = new GoogleGenAI({ apiKey });
 
     const systemPrompt = `
