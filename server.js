@@ -653,7 +653,7 @@ app.post('/api/ai-chat', asyncHandler(async (req, res) => {
       return res.status(500).json({ reply: fallbackReply });
     }
 
-    const { GoogleGenAI } = require('@google/genai');
+    const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey });
     const safeHistory = Array.isArray(history) ? history : [];
 
