@@ -1,5 +1,6 @@
 ﻿const express = require('express');
 const cors = require('cors');
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
@@ -49,7 +50,10 @@ class StorageUnavailableError extends Error {
   }
 }
 
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+}));
 app.use(express.json({ limit: '10mb' }));
 
 const defaultDb = {
@@ -633,24 +637,47 @@ const premiumOfflineReply = (message, tours) => {
 };
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'TravelPay API' });
+  res.status(200).json({
+    status: 'running',
+    ok: true,
+    service: 'TravelPay API',
+  });
+});
+
+app.get('/api/test-ai', (req, res) => {
+  res.json({
+    status: 'ok',
+    geminiKey: !!process.env.GEMINI_API_KEY,
+  });
 });
 
 app.post('/api/ai-chat', asyncHandler(async (req, res) => {
   const fallbackReply = 'Сейчас ассистент временно недоступен, попробуйте позже.';
 
   try {
+    console.log('AI request:', req.body);
+    console.log('Gemini key exists:', !!process.env.GEMINI_API_KEY);
+
     const { message, history = [] } = req.body || {};
     const userMessage = String(message || '').trim();
 
     if (!userMessage) {
-      return res.status(400).json({ error: 'Message is required' });
+      return res.status(400).json({
+        success: false,
+        error: 'Message is required',
+        reply: fallbackReply,
+      });
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey || apiKey === 'мой_ключ_сюда') {
-      return res.status(500).json({ reply: fallbackReply });
+      console.warn('AI warning: GEMINI_API_KEY is missing in environment variables.');
+      return res.status(200).json({
+        success: false,
+        reply: fallbackReply,
+        message: 'GEMINI_API_KEY is missing',
+      });
     }
 
     const { GoogleGenAI } = await import('@google/genai');
@@ -687,10 +714,18 @@ TravelPay AI:
       contents: chatText,
     });
 
-    return res.json({ reply: result.text || fallbackReply });
+    return res.json({
+      success: true,
+      reply: result.text || fallbackReply,
+    });
   } catch (error) {
-    console.error('AI error:', error);
-    return res.status(500).json({ reply: fallbackReply });
+    console.error('AI ERROR:', error);
+    return res.status(500).json({
+      success: false,
+      reply: fallbackReply,
+      message: error.message,
+      stack: error.stack,
+    });
   }
 }));
 
