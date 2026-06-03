@@ -3,7 +3,6 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
-const aiChatRoute = require('./routes/aiChat');
 
 const loadLocalEnv = () => {
   const envFiles = [
@@ -52,7 +51,6 @@ class StorageUnavailableError extends Error {
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(aiChatRoute);
 
 const defaultDb = {
   users: [
@@ -637,6 +635,64 @@ const premiumOfflineReply = (message, tours) => {
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'TravelPay API' });
 });
+
+app.post('/api/ai-chat', asyncHandler(async (req, res) => {
+  const fallbackReply = 'Сейчас ассистент временно недоступен, попробуйте позже.';
+
+  try {
+    const { message, history = [] } = req.body || {};
+    const userMessage = String(message || '').trim();
+
+    if (!userMessage) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey || apiKey === 'мой_ключ_сюда') {
+      return res.status(500).json({ reply: fallbackReply });
+    }
+
+    const { GoogleGenAI } = require('@google/genai');
+    const ai = new GoogleGenAI({ apiKey });
+    const safeHistory = Array.isArray(history) ? history : [];
+
+    const systemPrompt = `
+Ты TravelPay AI — умный помощник платформы TravelPay.
+Отвечай на русском языке.
+Помогай пользователю:
+- подобрать тур по Кыргызстану;
+- объяснить накопление на путешествие;
+- рассчитать примерный ежемесячный платеж;
+- рассказать про бронирование;
+- объяснить, как работает TravelPay;
+- давать советы по отдыху, бюджету и маршрутам.
+
+Не отвечай на темы, не связанные с TravelPay, туризмом, путешествиями, Кыргызстаном, оплатой и накоплением.
+Отвечай понятно, коротко и дружелюбно.
+`;
+
+    const chatText = `
+${systemPrompt}
+
+История диалога:
+${safeHistory.map((item) => `${item.role}: ${item.content}`).join('\n')}
+
+Пользователь: ${userMessage}
+TravelPay AI:
+`;
+
+    const result = await ai.models.generateContent({
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+      contents: chatText,
+    });
+
+    return res.json({ reply: result.text || fallbackReply });
+  } catch (error) {
+    console.error('AI error:', error);
+    return res.status(500).json({ reply: fallbackReply });
+  }
+}));
 
 app.post('/api/ai-assistant', asyncHandler(async (req, res) => {
   try {
