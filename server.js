@@ -41,6 +41,10 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'travelpay';
 let mongoClientPromise;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_COMPANY_ID = 1;
+const DEFAULT_AVATAR = 'https://www.w3schools.com/howto/img_avatar.png';
+const ADMIN_ROLES = new Set(['super_admin', 'company_admin', 'company_manager']);
+const COMPANY_STAFF_ROLES = new Set(['company_admin', 'company_manager']);
 
 class StorageUnavailableError extends Error {
   constructor(message, options = {}) {
@@ -59,6 +63,18 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 const defaultDb = {
+  companies: [
+    {
+      id: DEFAULT_COMPANY_ID,
+      name: 'TravelPay Demo',
+      logo: '',
+      phone: '+996 700 000 000',
+      email: 'hello@travelpay.kg',
+      address: 'Bishkek, Kyrgyzstan',
+      ownerId: 1,
+      status: 'active',
+    },
+  ],
   users: [
     {
       id: 1,
@@ -66,8 +82,9 @@ const defaultDb = {
       email: 'admin@travelpay.kg',
       password: 'admin123',
       balance: 10000,
-      role: 'admin',
-      avatar: 'https://www.w3schools.com/howto/img_avatar.png',
+      role: 'super_admin',
+      companyId: DEFAULT_COMPANY_ID,
+      avatar: DEFAULT_AVATAR,
       isLoggedIn: true,
       favorites: [],
       savings: {
@@ -84,6 +101,7 @@ const defaultDb = {
   tours: [
     {
       id: 1,
+      companyId: DEFAULT_COMPANY_ID,
       title: 'РўСѓСЂ РЅР° РСЃСЃС‹Рє-РљСѓР»СЊ',
       description: 'РћР·РµСЂРѕ, РіРѕСЂРЅС‹Рµ РїРµР№Р·Р°Р¶Рё, РєСѓРїР°РЅРёРµ Рё СЃРїРѕРєРѕР№РЅС‹Р№ РѕС‚РґС‹С… РЅР° Р±РµСЂРµРіСѓ.',
       duration: '4 РґРЅСЏ',
@@ -93,6 +111,7 @@ const defaultDb = {
     },
     {
       id: 2,
+      companyId: DEFAULT_COMPANY_ID,
       title: 'Р‘Р°С€РЅСЏ Р‘СѓСЂР°РЅР°',
       description: 'РСЃС‚РѕСЂРёС‡РµСЃРєРёР№ РѕРґРЅРѕРґРЅРµРІРЅС‹Р№ С‚СѓСЂ РїРѕ СЃР»РµРґР°Рј Р’РµР»РёРєРѕРіРѕ С€РµР»РєРѕРІРѕРіРѕ РїСѓС‚Рё.',
       duration: '1 РґРµРЅСЊ',
@@ -101,6 +120,7 @@ const defaultDb = {
       location: 'Р§СѓР№СЃРєР°СЏ РѕР±Р»Р°СЃС‚СЊ',
     },
   ],
+  accommodations: [],
   topupRequests: [],
 };
 
@@ -153,10 +173,16 @@ const getMongoDb = async ({ allowFallback = false } = {}) => {
 };
 
 const seedMongoIfEmpty = async (db) => {
-  const [usersCount, toursCount] = await Promise.all([
+  const [companiesCount, usersCount, toursCount, accommodationsCount] = await Promise.all([
+    db.collection('companies').countDocuments(),
     db.collection('users').countDocuments(),
     db.collection('tours').countDocuments(),
+    db.collection('accommodations').countDocuments(),
   ]);
+
+  if (!companiesCount) {
+    await db.collection('companies').insertMany(defaultDb.companies);
+  }
 
   if (!usersCount) {
     await db.collection('users').insertMany(defaultDb.users);
@@ -165,6 +191,10 @@ const seedMongoIfEmpty = async (db) => {
   if (!toursCount) {
     await db.collection('tours').insertMany(defaultDb.tours);
   }
+
+  if (!accommodationsCount && defaultDb.accommodations.length) {
+    await db.collection('accommodations').insertMany(defaultDb.accommodations);
+  }
 };
 
 const readDb = async () => {
@@ -172,15 +202,19 @@ const readDb = async () => {
 
   if (mongoDb) {
     await seedMongoIfEmpty(mongoDb);
-    const [users, tours, topupRequests] = await Promise.all([
+    const [companies, users, tours, accommodations, topupRequests] = await Promise.all([
+      mongoDb.collection('companies').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('users').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('tours').find({}).sort({ id: 1 }).toArray(),
+      mongoDb.collection('accommodations').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('topupRequests').find({}).sort({ createdAt: -1 }).toArray(),
     ]);
 
     return {
+      companies: companies.map(stripMongoId).map(normalizeCompany),
       users: users.map(stripMongoId).map(normalizeUser),
-      tours: tours.map(stripMongoId),
+      tours: tours.map(stripMongoId).map(normalizeTour),
+      accommodations: accommodations.map(stripMongoId).map(normalizeAccommodationEntity),
       topupRequests: topupRequests.map(stripMongoId).map(normalizeTopupRequest),
     };
   }
@@ -189,10 +223,16 @@ const readDb = async () => {
   try {
     const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     return {
+      companies: Array.isArray(parsed.companies)
+        ? parsed.companies.map(normalizeCompany)
+        : defaultDb.companies.map(normalizeCompany),
       users: Array.isArray(parsed.users)
         ? parsed.users.map(normalizeUser)
         : [],
-      tours: Array.isArray(parsed.tours) ? parsed.tours : [],
+      tours: Array.isArray(parsed.tours) ? parsed.tours.map(normalizeTour) : [],
+      accommodations: Array.isArray(parsed.accommodations)
+        ? parsed.accommodations.map(normalizeAccommodationEntity)
+        : [],
       topupRequests: Array.isArray(parsed.topupRequests)
         ? parsed.topupRequests.map(normalizeTopupRequest)
         : [],
@@ -225,18 +265,24 @@ const saveDb = async (data) => {
   }
 
   const users = data.users.map(stripMongoId);
+  const companies = ensureArray(data.companies).map(stripMongoId);
   const tours = data.tours.map(stripMongoId);
+  const accommodations = ensureArray(data.accommodations).map(stripMongoId);
   const topupRequests = ensureArray(data.topupRequests).map(stripMongoId);
 
   await Promise.all([
+    mongoDb.collection('companies').deleteMany({}),
     mongoDb.collection('users').deleteMany({}),
     mongoDb.collection('tours').deleteMany({}),
+    mongoDb.collection('accommodations').deleteMany({}),
     mongoDb.collection('topupRequests').deleteMany({}),
   ]);
 
   await Promise.all([
+    companies.length ? mongoDb.collection('companies').insertMany(companies) : Promise.resolve(),
     users.length ? mongoDb.collection('users').insertMany(users) : Promise.resolve(),
     tours.length ? mongoDb.collection('tours').insertMany(tours) : Promise.resolve(),
+    accommodations.length ? mongoDb.collection('accommodations').insertMany(accommodations) : Promise.resolve(),
     topupRequests.length ? mongoDb.collection('topupRequests').insertMany(topupRequests) : Promise.resolve(),
   ]);
 };
@@ -253,14 +299,100 @@ const nextId = (items) => {
   return maxId + 1;
 };
 
+const normalizeRole = (value) => {
+  const role = normalizeString(value, 'user').toLowerCase();
+  if (role === 'admin') return 'super_admin';
+  if (role === 'manager') return 'company_manager';
+  if (ADMIN_ROLES.has(role) || role === 'user') return role;
+  return 'user';
+};
+
+const normalizeCompanyId = (value, fallback = DEFAULT_COMPANY_ID) => {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const fallbackNumeric = Number(fallback);
+  return Number.isFinite(fallbackNumeric) && fallbackNumeric > 0 ? fallbackNumeric : DEFAULT_COMPANY_ID;
+};
+
+const COMPANY_STATUSES = new Set(['pending', 'active', 'rejected', 'blocked', 'inactive', 'archived']);
+const ACCOMMODATION_STATUSES = new Set(['available', 'sold_out', 'inactive']);
+const TOUR_CALENDAR_STATUSES = new Set(['scheduled', 'in_progress', 'completed', 'cancelled', 'sold_out']);
+
+const normalizeCompany = (company) => ({
+  id: Number(company?.id) || 0,
+  name: normalizeString(company?.name || `Company ${company?.id || DEFAULT_COMPANY_ID}`),
+  logo: normalizeString(company?.logo),
+  phone: normalizeString(company?.phone),
+  email: normalizeString(company?.email).toLowerCase(),
+  city: normalizeString(company?.city),
+  address: normalizeString(company?.address),
+  description: normalizeString(company?.description),
+  documents: ensureArray(company?.documents).map((item) => normalizeString(item)).filter(Boolean),
+  ownerId: Number(company?.ownerId) || null,
+  rejectionReason: normalizeString(company?.rejectionReason),
+  createdAt: normalizeDateValue(company?.createdAt) || new Date().toISOString(),
+  updatedAt: normalizeDateValue(company?.updatedAt) || new Date().toISOString(),
+  status: COMPANY_STATUSES.has(company?.status) ? company.status : 'active',
+});
+
 const normalizeTour = (tour) => ({
   ...tour,
+  companyId: normalizeCompanyId(tour.companyId),
+  companyName: normalizeString(tour.companyName),
+  accommodationIds: ensureArray(tour.accommodationIds).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
   title: String(tour.title || '').trim(),
   description: String(tour.description || '').trim(),
   duration: String(tour.duration || '').trim(),
   location: String(tour.location || '').trim(),
   image: String(tour.image || '').trim(),
   price: Number(tour.price) || 0,
+  startDate: normalizeDateValue(tour.startDate || tour.dateStart || tour.departureDate || tour.date),
+  endDate: normalizeDateValue(tour.endDate || tour.dateEnd || tour.returnDate || tour.startDate || tour.date),
+  route: normalizeString(tour.route || tour.location),
+  manager: normalizeString(tour.manager),
+  totalSeats: Math.max(Number(tour.totalSeats || tour.seats || tour.capacity) || 20, 1),
+  bookedSeats: Math.max(Number(tour.bookedSeats) || 0, 0),
+  calendarStatus: TOUR_CALENDAR_STATUSES.has(tour.calendarStatus || tour.tripStatus || tour.scheduleStatus)
+    ? (tour.calendarStatus || tour.tripStatus || tour.scheduleStatus)
+    : 'scheduled',
+});
+
+const normalizeAccommodationEntity = (item) => ({
+  ...item,
+  id: Number(item?.id) || 0,
+  companyId: normalizeCompanyId(item?.companyId),
+  title: normalizeString(item?.title || item?.name || 'Accommodation'),
+  name: normalizeString(item?.name || item?.title || 'Accommodation'),
+  description: normalizeString(item?.description),
+  location: normalizeString(item?.location),
+  images: ensureArray(item?.images).map((image) => normalizeString(image)).filter(Boolean),
+  capacity: Number(item?.capacity) || 1,
+  pricePerNight: Number(item?.pricePerNight) || 0,
+  amenities: ensureArray(item?.amenities).map((value) => normalizeString(value)).filter(Boolean),
+  totalCount: Number(item?.totalCount) || Number(item?.availableCount) || 1,
+  availableCount: Number(item?.availableCount) || Number(item?.totalCount) || 1,
+  type: normalizeString(item?.type, 'standard') || 'standard',
+  extraBedAvailable: Boolean(item?.extraBedAvailable),
+  extraBedPrice: Number(item?.extraBedPrice) || 0,
+  linkedTourIds: ensureArray(item?.linkedTourIds).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
+  status: ACCOMMODATION_STATUSES.has(item?.status) ? item.status : 'available',
+});
+
+const toTourAccommodation = (item) => ({
+  id: item.id,
+  name: item.name || item.title,
+  title: item.title || item.name,
+  type: item.type || 'standard',
+  images: item.images || [],
+  description: item.description || '',
+  capacity: Number(item.capacity || 0),
+  pricePerNight: Number(item.pricePerNight || 0),
+  availableCount: Number(item.availableCount || item.totalCount || 0),
+  amenities: ensureArray(item.amenities),
+  extraBedAvailable: Boolean(item.extraBedAvailable),
+  extraBedPrice: Number(item.extraBedPrice || 0),
+  status: item.status || 'available',
+  location: item.location || '',
 });
 
 const normalizeSavings = (savings) => {
@@ -332,6 +464,7 @@ const normalizeTopupRequest = (request) => {
   return {
     id: Number(request?.id) || 0,
     userId: Number(request?.userId) || 0,
+    companyId: normalizeCompanyId(request?.companyId),
     amount: Number(request?.amount) || 0,
     bonus: Number(request?.bonus) || 0,
     receiptImage: normalizeString(request?.receiptImage),
@@ -349,14 +482,29 @@ const normalizeTopupRequest = (request) => {
 const normalizeBooking = (booking) => ({
   id: booking?.id || createId('booking'),
   tourId: booking?.tourId || booking?.id || '',
+  companyId: normalizeCompanyId(booking?.companyId),
+  companyName: normalizeString(booking?.companyName),
+  clientName: normalizeString(booking?.clientName),
+  clientPhone: normalizeString(booking?.clientPhone),
+  clientEmail: normalizeString(booking?.clientEmail),
   tourTitle: normalizeString(booking?.tourTitle || booking?.title),
   location: normalizeString(booking?.location),
   image: normalizeString(booking?.image),
   amount: Number(booking?.amount) || Number(booking?.price) || 0,
   status: normalizeString(booking?.status, 'paid') || 'paid',
+  paymentStatus: normalizeString(booking?.paymentStatus, booking?.status === 'paid' ? 'paid' : 'pending') || 'pending',
   purchasedAt: normalizeDateValue(booking?.purchasedAt || booking?.date) || new Date().toISOString(),
-  travelDate: normalizeDateValue(booking?.travelDate) || '',
+  travelDate: normalizeDateValue(booking?.travelDate || booking?.date) || '',
+  date: normalizeDateValue(booking?.date || booking?.travelDate || booking?.purchasedAt) || new Date().toISOString(),
+  endDate: normalizeDateValue(booking?.endDate),
+  durationMinutes: Number(booking?.durationMinutes) || 60,
+  assignedTo: normalizeString(booking?.assignedTo || booking?.manager),
   paymentMethod: normalizeString(booking?.paymentMethod, 'savings') || 'savings',
+  accommodation: booking?.accommodation || null,
+  accommodationTotal: Number(booking?.accommodationTotal) || 0,
+  extraBedSelected: Boolean(booking?.extraBedSelected),
+  extraBedTotal: Number(booking?.extraBedTotal) || 0,
+  baseTourAmount: Number(booking?.baseTourAmount) || 0,
 });
 
 const normalizeNotification = (item) => ({
@@ -462,8 +610,9 @@ const normalizeUser = (user) => {
     name: normalizeString(user.name),
     email: normalizeString(user.email).toLowerCase(),
     phone: normalizeString(user.phone),
-    role: normalizeString(user.role, 'user') || 'user',
-    avatar: normalizeString(user.avatar, 'https://www.w3schools.com/howto/img_avatar.png') || 'https://www.w3schools.com/howto/img_avatar.png',
+    role: normalizeRole(user.role),
+    companyId: normalizeCompanyId(user.companyId),
+    avatar: normalizeString(user.avatar, DEFAULT_AVATAR) || DEFAULT_AVATAR,
     favorites: ensureArray(user.favorites),
     balance: Number(user.balance) || 0,
     savings,
@@ -811,11 +960,6 @@ app.post('/api/ai-assistant', asyncHandler(async (req, res) => {
   }
 }));
 
-app.get('/tours', asyncHandler(async (req, res) => {
-  const db = await readDb();
-  res.json(db.tours);
-}));
-
 app.post('/auth/login', asyncHandler(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '').trim();
@@ -825,7 +969,7 @@ app.post('/auth/login', asyncHandler(async (req, res) => {
   );
 
   if (!user && email === 'admin@travelpay.kg' && password === 'admin123') {
-    user = db.users.find((item) => item.role === 'admin');
+    user = db.users.find((item) => normalizeRole(item.role) === 'super_admin');
   }
 
   if (!user) {
@@ -835,52 +979,504 @@ app.post('/auth/login', asyncHandler(async (req, res) => {
   res.json(sanitizeUser({ ...user, isLoggedIn: true }));
 }));
 
-app.post('/tours', asyncHandler(async (req, res) => {
-  const db = await readDb();
-  const tour = normalizeTour({ ...req.body, id: nextId(db.tours) });
-
-  if (!tour.title || !tour.description || !tour.image || !tour.price) {
-    return res.status(400).json({ message: 'Р—Р°РїРѕР»РЅРёС‚Рµ РЅР°Р·РІР°РЅРёРµ, РѕРїРёСЃР°РЅРёРµ, С†РµРЅСѓ Рё РєР°СЂС‚РёРЅРєСѓ С‚СѓСЂР°.' });
-  }
-
-  db.tours.push(tour);
-  await saveDb(db);
-  res.status(201).json(tour);
-}));
-
-app.put('/tours/:id', asyncHandler(async (req, res) => {
-  const db = await readDb();
-  const id = Number(req.params.id);
-  const index = db.tours.findIndex((tour) => Number(tour.id) === id);
-
-  if (index === -1) {
-    return res.status(404).json({ message: 'РўСѓСЂ РЅРµ РЅР°Р№РґРµРЅ.' });
-  }
-
-  db.tours[index] = normalizeTour({ ...db.tours[index], ...req.body, id });
-  await saveDb(db);
-  res.json(db.tours[index]);
-}));
-
-app.delete('/tours/:id', asyncHandler(async (req, res) => {
-  const db = await readDb();
-  const id = Number(req.params.id);
-  const nextTours = db.tours.filter((tour) => Number(tour.id) !== id);
-
-  if (nextTours.length === db.tours.length) {
-    return res.status(404).json({ message: 'РўСѓСЂ РЅРµ РЅР°Р№РґРµРЅ.' });
-  }
-
-  db.tours = nextTours;
-  await saveDb(db);
-  res.status(204).end();
-}));
-
 const getAuthenticatedUser = (db, req) => {
   const userId = Number(req.get('x-user-id'));
   if (!userId) return null;
   return db.users.find((user) => Number(user.id) === userId) || null;
 };
+
+const isSuperAdmin = (user) => normalizeRole(user?.role) === 'super_admin';
+const isCompanyStaff = (user) => COMPANY_STAFF_ROLES.has(normalizeRole(user?.role));
+const isAdminUser = (user) => ADMIN_ROLES.has(normalizeRole(user?.role));
+const getScopedCompanyId = (user) => (isCompanyStaff(user) ? normalizeCompanyId(user?.companyId) : null);
+const canAccessCompany = (user, companyId) => isSuperAdmin(user) || getScopedCompanyId(user) === normalizeCompanyId(companyId);
+const findUserCompany = (db, user) => db.companies.find((company) => Number(company.id) === normalizeCompanyId(user?.companyId));
+const isCompanyActive = (company) => normalizeString(company?.status, 'active') === 'active';
+
+app.post('/business/register', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const email = normalizeString(req.body.email).toLowerCase();
+  const password = normalizeString(req.body.password);
+  const companyName = normalizeString(req.body.companyName || req.body.name);
+  const ownerName = normalizeString(req.body.ownerName);
+
+  if (!companyName || !ownerName || !email || !password) {
+    return res.status(400).json({ message: 'Укажите компанию, владельца, email и пароль.' });
+  }
+
+  if (db.users.some((user) => String(user.email).toLowerCase() === email)) {
+    return res.status(409).json({ message: 'Пользователь с таким email уже существует.' });
+  }
+
+  if (db.companies.some((company) => String(company.email).toLowerCase() === email || String(company.name).trim().toLowerCase() === companyName.toLowerCase())) {
+    return res.status(409).json({ message: 'Компания с таким названием или email уже существует.' });
+  }
+
+  const companyId = nextId(db.companies);
+  const userId = nextId(db.users);
+  const now = new Date().toISOString();
+  const company = normalizeCompany({
+    id: companyId,
+    name: companyName,
+    ownerId: userId,
+    phone: req.body.phone,
+    email,
+    city: req.body.city,
+    address: req.body.address,
+    description: req.body.description,
+    logo: req.body.logo,
+    documents: req.body.documents,
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  });
+  const user = normalizeUser({
+    id: userId,
+    name: ownerName,
+    email,
+    phone: req.body.phone,
+    password,
+    balance: 0,
+    role: 'company_admin',
+    companyId,
+    avatar: req.body.logo || DEFAULT_AVATAR,
+    isLoggedIn: false,
+    favorites: [],
+    savings: normalizeSavings(),
+  });
+
+  db.companies.push(company);
+  db.users.push(user);
+  await saveDb(db);
+  res.status(201).json({
+    message: 'Заявка компании отправлена. После проверки вы сможете публиковать туры.',
+    company,
+    user: sanitizeUser(user),
+  });
+}));
+
+app.post('/business/login', asyncHandler(async (req, res) => {
+  const email = normalizeString(req.body.email).toLowerCase();
+  const password = normalizeString(req.body.password);
+  const db = await readDb();
+  const user = db.users.find(
+    (item) => String(item.email).toLowerCase() === email && String(item.password) === password,
+  );
+
+  if (!user) {
+    return res.status(401).json({ message: 'Неверный email или пароль.' });
+  }
+
+  if (!isCompanyStaff(user)) {
+    return res.status(403).json({ message: 'TravelPay Business доступен только тур-компаниям.' });
+  }
+
+  const company = findUserCompany(db, user);
+  if (!company) {
+    return res.status(403).json({ message: 'Компания не найдена.' });
+  }
+
+  const safeUser = sanitizeUser({ ...user, isLoggedIn: true });
+  if (company.status === 'pending') {
+    return res.status(202).json({ status: 'pending', company, user: safeUser });
+  }
+
+  if (company.status === 'rejected') {
+    return res.status(403).json({
+      status: 'rejected',
+      message: company.rejectionReason || 'Заявка компании отклонена.',
+      company,
+      user: safeUser,
+    });
+  }
+
+  if (company.status === 'blocked' || company.status === 'inactive' || company.status === 'archived') {
+    return res.status(403).json({
+      status: company.status,
+      message: 'Доступ компании временно ограничен.',
+      company,
+      user: safeUser,
+    });
+  }
+
+  res.json({ status: 'active', company, user: safeUser });
+}));
+
+const requireAdminUser = (user, res) => {
+  if (!user || !isAdminUser(user)) {
+    res.status(403).json({ message: 'Доступ разрешён только администраторам компании.' });
+    return false;
+  }
+
+  return true;
+};
+
+const requireActiveCompany = (db, user, res) => {
+  if (!isCompanyStaff(user)) return true;
+
+  const company = findUserCompany(db, user);
+  if (!isCompanyActive(company)) {
+    res.status(403).json({
+      message: company?.status === 'pending'
+        ? 'Компания ожидает подтверждения. Публикация туров пока недоступна.'
+        : 'Компания не активна. Управление турами недоступно.',
+      company,
+    });
+    return false;
+  }
+
+  return true;
+};
+
+const filterUsersByScope = (users, user) => {
+  if (!user) return users;
+  if (isSuperAdmin(user)) return users;
+  if (isCompanyStaff(user)) {
+    const companyId = getScopedCompanyId(user);
+    return users.filter((item) => normalizeCompanyId(item.companyId) === companyId);
+  }
+
+  return users.filter((item) => Number(item.id) === Number(user.id));
+};
+
+const filterTopupsByScope = (requests, users, user) => {
+  if (isSuperAdmin(user)) return requests;
+  const companyId = getScopedCompanyId(user);
+  return requests.filter((request) => {
+    if (normalizeCompanyId(request.companyId) === companyId) return true;
+    const requestUser = users.find((item) => Number(item.id) === Number(request.userId));
+    return normalizeCompanyId(requestUser?.companyId) === companyId;
+  });
+};
+
+const filterAccommodationsByScope = (accommodations, user) => {
+  if (!user) {
+    return accommodations.filter((item) => item.status !== 'inactive');
+  }
+
+  if (isSuperAdmin(user)) return accommodations;
+  if (isCompanyStaff(user)) {
+    const companyId = getScopedCompanyId(user);
+    return accommodations.filter((item) => normalizeCompanyId(item.companyId) === companyId);
+  }
+
+  return accommodations.filter((item) => item.status === 'available');
+};
+
+const buildTourResponse = (tour, accommodations = []) => {
+  const embedded = ensureArray(tour.accommodations).map(toTourAccommodation);
+  const linked = accommodations
+    .filter((item) => item.linkedTourIds.includes(Number(tour.id)) || ensureArray(tour.accommodationIds).includes(Number(item.id)))
+    .map(toTourAccommodation);
+  const merged = [...embedded];
+
+  linked.forEach((item) => {
+    if (!merged.some((entry) => Number(entry.id) === Number(item.id))) {
+      merged.push(item);
+    }
+  });
+
+  return {
+    ...tour,
+    accommodationIds: merged.map((item) => Number(item.id)).filter((id) => Number.isFinite(id)),
+    hasAccommodation: Boolean(tour.hasAccommodation || merged.length),
+    accommodations: merged,
+  };
+};
+
+app.get('/companies', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (isSuperAdmin(currentUser)) {
+    return res.json(db.companies);
+  }
+
+  if (isCompanyStaff(currentUser)) {
+    return res.json(db.companies.filter((company) => Number(company.id) === getScopedCompanyId(currentUser)));
+  }
+
+  res.json(db.companies.filter((company) => company.status === 'active'));
+}));
+
+app.post('/companies', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!currentUser || !isSuperAdmin(currentUser)) {
+    return res.status(403).json({ message: 'Создавать компании может только super admin.' });
+  }
+
+  const company = normalizeCompany({
+    ...req.body,
+    id: nextId(db.companies),
+  });
+
+  if (!company.name) {
+    return res.status(400).json({ message: 'Укажите название компании.' });
+  }
+
+  db.companies.push(company);
+  await saveDb(db);
+  res.status(201).json(company);
+}));
+
+app.put('/companies/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!currentUser || !isSuperAdmin(currentUser)) {
+    return res.status(403).json({ message: 'Изменять компании может только super admin.' });
+  }
+
+  const id = Number(req.params.id);
+  const index = db.companies.findIndex((company) => Number(company.id) === id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: 'Компания не найдена.' });
+  }
+
+  db.companies[index] = normalizeCompany({
+    ...db.companies[index],
+    ...req.body,
+    id,
+    updatedAt: new Date().toISOString(),
+  });
+
+  await saveDb(db);
+  res.json(db.companies[index]);
+}));
+
+app.get('/accommodations', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  const { tourId } = req.query;
+  let result = filterAccommodationsByScope(db.accommodations || [], currentUser);
+
+  if (tourId) {
+    const normalizedTourId = Number(tourId);
+    result = result.filter((item) => item.linkedTourIds.includes(normalizedTourId));
+  }
+
+  res.json(result);
+}));
+
+app.post('/accommodations', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!requireAdminUser(currentUser, res)) {
+    return;
+  }
+
+  if (!requireActiveCompany(db, currentUser, res)) {
+    return;
+  }
+
+  const companyId = isSuperAdmin(currentUser)
+    ? normalizeCompanyId(req.body.companyId)
+    : getScopedCompanyId(currentUser);
+  const accommodation = normalizeAccommodationEntity({
+    ...req.body,
+    id: nextId(db.accommodations || []),
+    companyId,
+  });
+
+  if (!accommodation.title || !accommodation.location || !accommodation.pricePerNight) {
+    return res.status(400).json({ message: 'Укажите название, локацию и цену за ночь.' });
+  }
+
+  db.accommodations = ensureArray(db.accommodations);
+  db.accommodations.push(accommodation);
+  await saveDb(db);
+  res.status(201).json(accommodation);
+}));
+
+app.put('/accommodations/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!requireAdminUser(currentUser, res)) {
+    return;
+  }
+
+  if (!requireActiveCompany(db, currentUser, res)) {
+    return;
+  }
+
+  const id = Number(req.params.id);
+  const index = ensureArray(db.accommodations).findIndex((item) => Number(item.id) === id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: 'Домик не найден.' });
+  }
+
+  if (!canAccessCompany(currentUser, db.accommodations[index].companyId)) {
+    return res.status(403).json({ message: 'Нельзя изменять домики другой компании.' });
+  }
+
+  const companyId = isSuperAdmin(currentUser)
+    ? normalizeCompanyId(req.body.companyId ?? db.accommodations[index].companyId)
+    : getScopedCompanyId(currentUser);
+
+  db.accommodations[index] = normalizeAccommodationEntity({
+    ...db.accommodations[index],
+    ...req.body,
+    id,
+    companyId,
+  });
+
+  await saveDb(db);
+  res.json(db.accommodations[index]);
+}));
+
+app.delete('/accommodations/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!requireAdminUser(currentUser, res)) {
+    return;
+  }
+
+  const id = Number(req.params.id);
+  const accommodation = ensureArray(db.accommodations).find((item) => Number(item.id) === id);
+
+  if (!accommodation) {
+    return res.status(404).json({ message: 'Домик не найден.' });
+  }
+
+  if (!canAccessCompany(currentUser, accommodation.companyId)) {
+    return res.status(403).json({ message: 'Нельзя удалять домики другой компании.' });
+  }
+
+  db.accommodations = ensureArray(db.accommodations).filter((item) => Number(item.id) !== id);
+  db.tours = db.tours.map((tour) => normalizeTour({
+    ...tour,
+    accommodationIds: ensureArray(tour.accommodationIds).filter((item) => Number(item) !== id),
+  }));
+  await saveDb(db);
+  res.status(204).end();
+}));
+
+app.get('/tours', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  const scopedAccommodations = filterAccommodationsByScope(db.accommodations || [], currentUser);
+  const visiblePublicStatuses = new Set(['active', 'hot', 'discount', 'published']);
+
+  if (isCompanyStaff(currentUser)) {
+    return res.json(
+      db.tours
+        .filter((tour) => normalizeCompanyId(tour.companyId) === getScopedCompanyId(currentUser))
+        .map((tour) => buildTourResponse(tour, scopedAccommodations)),
+    );
+  }
+
+  if (!isSuperAdmin(currentUser)) {
+    return res.json(
+      db.tours
+        .filter((tour) => visiblePublicStatuses.has(tour.status || 'active'))
+        .map((tour) => buildTourResponse(tour, scopedAccommodations)),
+    );
+  }
+
+  res.json(db.tours.map((tour) => buildTourResponse(tour, scopedAccommodations)));
+}));
+
+app.post('/tours', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!requireAdminUser(currentUser, res)) {
+    return;
+  }
+
+  if (!requireActiveCompany(db, currentUser, res)) {
+    return;
+  }
+
+  const companyId = isSuperAdmin(currentUser)
+    ? normalizeCompanyId(req.body.companyId)
+    : getScopedCompanyId(currentUser);
+  const company = db.companies.find((item) => Number(item.id) === companyId);
+  const tour = normalizeTour({
+    ...req.body,
+    id: nextId(db.tours),
+    companyId,
+    companyName: company?.name || req.body.companyName || '',
+  });
+
+  if (!tour.title || !tour.description || !tour.image || !tour.price) {
+    return res.status(400).json({ message: 'Заполните название, описание, цену и картинку тура.' });
+  }
+
+  db.tours.push(tour);
+  await saveDb(db);
+  res.status(201).json(buildTourResponse(tour, filterAccommodationsByScope(db.accommodations || [], currentUser)));
+}));
+
+app.put('/tours/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!requireAdminUser(currentUser, res)) {
+    return;
+  }
+
+  if (!requireActiveCompany(db, currentUser, res)) {
+    return;
+  }
+
+  const id = Number(req.params.id);
+  const index = db.tours.findIndex((tour) => Number(tour.id) === id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: 'Тур не найден.' });
+  }
+
+  if (!canAccessCompany(currentUser, db.tours[index].companyId)) {
+    return res.status(403).json({ message: 'Нельзя изменять туры другой компании.' });
+  }
+
+  const nextCompanyId = isSuperAdmin(currentUser)
+    ? normalizeCompanyId(req.body.companyId ?? db.tours[index].companyId)
+    : getScopedCompanyId(currentUser);
+  const company = db.companies.find((item) => Number(item.id) === nextCompanyId);
+
+  db.tours[index] = normalizeTour({
+    ...db.tours[index],
+    ...req.body,
+    id,
+    companyId: nextCompanyId,
+    companyName: company?.name || db.tours[index].companyName || req.body.companyName || '',
+  });
+  await saveDb(db);
+  res.json(buildTourResponse(db.tours[index], filterAccommodationsByScope(db.accommodations || [], currentUser)));
+}));
+
+app.delete('/tours/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!requireAdminUser(currentUser, res)) {
+    return;
+  }
+
+  const id = Number(req.params.id);
+  const tour = db.tours.find((item) => Number(item.id) === id);
+
+  if (!tour) {
+    return res.status(404).json({ message: 'Тур не найден.' });
+  }
+
+  if (!canAccessCompany(currentUser, tour.companyId)) {
+    return res.status(403).json({ message: 'Нельзя удалять туры другой компании.' });
+  }
+
+  db.tours = db.tours.filter((item) => Number(item.id) !== id);
+  await saveDb(db);
+  res.status(204).end();
+}));
 
 const getTopupRequestWithUser = (request, users) => {
   const user = users.find((item) => Number(item.id) === Number(request.userId));
@@ -919,6 +1515,7 @@ app.post('/api/topup/create', asyncHandler(async (req, res) => {
   const request = normalizeTopupRequest({
     id: nextId(db.topupRequests),
     userId: user.id,
+    companyId: user.companyId,
     amount,
     bonus: 0,
     receiptImage,
@@ -956,11 +1553,11 @@ app.get('/api/admin/topups', asyncHandler(async (req, res) => {
   const db = await readDb();
   const admin = getAuthenticatedUser(db, req);
 
-  if (!admin || admin.role !== 'admin') {
-    return res.status(403).json({ message: 'Доступ разрешён только администратору.' });
+  if (!requireAdminUser(admin, res)) {
+    return;
   }
 
-  const requests = db.topupRequests
+  const requests = filterTopupsByScope(db.topupRequests, db.users, admin)
     .map((request) => getTopupRequestWithUser(request, db.users))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
@@ -971,8 +1568,8 @@ app.put('/api/admin/topups/:id/approve', asyncHandler(async (req, res) => {
   const db = await readDb();
   const admin = getAuthenticatedUser(db, req);
 
-  if (!admin || admin.role !== 'admin') {
-    return res.status(403).json({ message: 'Доступ разрешён только администратору.' });
+  if (!requireAdminUser(admin, res)) {
+    return;
   }
 
   const requestId = Number(req.params.id);
@@ -990,6 +1587,10 @@ app.put('/api/admin/topups/:id/approve', asyncHandler(async (req, res) => {
   const userIndex = db.users.findIndex((item) => Number(item.id) === Number(request.userId));
   if (userIndex === -1) {
     return res.status(404).json({ message: 'Пользователь заявки не найден.' });
+  }
+
+  if (!canAccessCompany(admin, request.companyId || db.users[userIndex]?.companyId)) {
+    return res.status(403).json({ message: 'Нельзя подтверждать заявки другой компании.' });
   }
 
   const approvedAmount = Number(req.body.amount ?? request.amount);
@@ -1062,8 +1663,8 @@ app.put('/api/admin/topups/:id/reject', asyncHandler(async (req, res) => {
   const db = await readDb();
   const admin = getAuthenticatedUser(db, req);
 
-  if (!admin || admin.role !== 'admin') {
-    return res.status(403).json({ message: 'Доступ разрешён только администратору.' });
+  if (!requireAdminUser(admin, res)) {
+    return;
   }
 
   const requestId = Number(req.params.id);
@@ -1086,6 +1687,10 @@ app.put('/api/admin/topups/:id/reject', asyncHandler(async (req, res) => {
   const userIndex = db.users.findIndex((item) => Number(item.id) === Number(request.userId));
   if (userIndex === -1) {
     return res.status(404).json({ message: 'Пользователь заявки не найден.' });
+  }
+
+  if (!canAccessCompany(admin, request.companyId || db.users[userIndex]?.companyId)) {
+    return res.status(403).json({ message: 'Нельзя отклонять заявки другой компании.' });
   }
 
   const reviewedAt = new Date().toISOString();
@@ -1120,21 +1725,41 @@ app.put('/api/admin/topups/:id/reject', asyncHandler(async (req, res) => {
 
 app.get('/users', asyncHandler(async (req, res) => {
   const { email } = req.query;
-  const { users } = await readDb();
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  let scopedUsers = db.users;
+
+  if (currentUser && isAdminUser(currentUser)) {
+    scopedUsers = filterUsersByScope(db.users, currentUser);
+  } else if (!email) {
+    return res.status(403).json({ message: 'Список пользователей доступен только администраторам.' });
+  }
+
   const result = email
-    ? users.filter((user) => String(user.email).toLowerCase() === String(email).toLowerCase())
-    : users;
+    ? scopedUsers.filter((user) => String(user.email).toLowerCase() === String(email).toLowerCase())
+    : scopedUsers;
 
   res.json(result.map(sanitizeUser));
 }));
 
 app.get('/users/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
-  const { users } = await readDb();
-  const user = users.find((item) => Number(item.id) === id);
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  const user = db.users.find((item) => Number(item.id) === id);
 
   if (!user) {
     return res.status(404).json({ message: 'Пользователь не найден.' });
+  }
+
+  if (currentUser) {
+    const isSelf = Number(currentUser.id) === id;
+    const isScopedAdmin = isAdminUser(currentUser) && canAccessCompany(currentUser, user.companyId);
+
+    if (!isSelf && !isScopedAdmin) {
+      return res.status(403).json({ message: 'Недостаточно прав для просмотра пользователя.' });
+    }
   }
 
   res.json(sanitizeUser(user));
@@ -1158,8 +1783,9 @@ app.post('/users', asyncHandler(async (req, res) => {
     email,
     password: String(req.body.password),
     balance: Number(req.body.balance) || 0,
-    avatar: req.body.avatar || 'https://www.w3schools.com/howto/img_avatar.png',
+    avatar: req.body.avatar || DEFAULT_AVATAR,
     role: req.body.role || 'user',
+    companyId: req.body.companyId ?? DEFAULT_COMPANY_ID,
     isLoggedIn: true,
     favorites: Array.isArray(req.body.favorites) ? req.body.favorites : [],
     savings: normalizeSavings(req.body.savings),
@@ -1180,6 +1806,7 @@ app.post('/users', asyncHandler(async (req, res) => {
 
 app.put('/users/:id', asyncHandler(async (req, res) => {
   const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
   const id = Number(req.params.id);
   const index = db.users.findIndex((user) => Number(user.id) === id);
 
@@ -1187,10 +1814,27 @@ app.put('/users/:id', asyncHandler(async (req, res) => {
     return res.status(404).json({ message: 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.' });
   }
 
+  const targetUser = db.users[index];
+  const isSelf = currentUser && Number(currentUser.id) === id;
+  const isScopedAdmin = currentUser && isAdminUser(currentUser) && canAccessCompany(currentUser, targetUser.companyId);
+
+  if (currentUser && !isSelf && !isScopedAdmin) {
+    return res.status(403).json({ message: 'Недостаточно прав для обновления пользователя.' });
+  }
+
+  const nextRole = isScopedAdmin
+    ? normalizeRole(req.body.role ?? targetUser.role)
+    : targetUser.role;
+  const nextCompanyId = isSuperAdmin(currentUser)
+    ? normalizeCompanyId(req.body.companyId ?? targetUser.companyId)
+    : targetUser.companyId;
+
   db.users[index] = normalizeUser({
-    ...db.users[index],
+    ...targetUser,
     ...req.body,
     id,
+    role: nextRole,
+    companyId: nextCompanyId,
     balance: Number(req.body.balance ?? db.users[index].balance) || 0,
     favorites: Array.isArray(req.body.favorites) ? req.body.favorites : db.users[index].favorites,
     savings: normalizeSavings(req.body.savings ?? db.users[index].savings),
@@ -1202,11 +1846,16 @@ app.put('/users/:id', asyncHandler(async (req, res) => {
 
 app.put('/users/:id/favorites', asyncHandler(async (req, res) => {
   const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
   const id = Number(req.params.id);
   const index = db.users.findIndex((user) => Number(user.id) === id);
 
   if (index === -1) {
     return res.status(404).json({ message: 'Пользователь не найден.' });
+  }
+
+  if (currentUser && Number(currentUser.id) !== id && !isAdminUser(currentUser)) {
+    return res.status(403).json({ message: 'Недостаточно прав для обновления избранного.' });
   }
 
   db.users[index] = normalizeUser({
@@ -1220,14 +1869,19 @@ app.put('/users/:id/favorites', asyncHandler(async (req, res) => {
 
 app.delete('/users/:id', asyncHandler(async (req, res) => {
   const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
   const id = Number(req.params.id);
-  const nextUsers = db.users.filter((user) => Number(user.id) !== id);
+  const targetUser = db.users.find((user) => Number(user.id) === id);
 
-  if (nextUsers.length === db.users.length) {
+  if (!targetUser) {
     return res.status(404).json({ message: 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.' });
   }
 
-  db.users = nextUsers;
+  if (!currentUser || !isAdminUser(currentUser) || !canAccessCompany(currentUser, targetUser.companyId)) {
+    return res.status(403).json({ message: 'Удалять пользователей может только администратор своей компании.' });
+  }
+
+  db.users = db.users.filter((user) => Number(user.id) !== id);
   await saveDb(db);
   res.status(204).end();
 }));
