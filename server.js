@@ -1965,8 +1965,8 @@ app.use((error, req, res, next) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`TravelPay API is running on http://localhost:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`TravelPay API is running on 0.0.0.0:${PORT}`);
   });
 }
 
