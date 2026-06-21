@@ -60,9 +60,9 @@
           "duration": "5",
           "image": "https://skigu.ru/upload/iblock/182/182330ad330cd623efe07bf0fa1e7973.jpg",
           "gallery": [
-            "https://commons.wikimedia.org/wiki/Special:FilePath/Issyk%20Kul%20Lake%2C%20Issyk%20Kul%20region%2C%20Kyrgyzstan.jpg",
-            "https://commons.wikimedia.org/wiki/Special:FilePath/Tian%20Shan%20in%20Kyrgyzstan%2001.jpg",
-            "https://commons.wikimedia.org/wiki/Special:FilePath/Jeti-Oguz%20rocks%2C%20Issyk%20Kul%20region%2C%20Kyrgyzstan%2002.jpg"
+            "/images/kyrgyzstan-mountains.jpg",
+            "/images/kyrgyzstan-mountains.jpg",
+            "/images/kyrgyzstan-mountains.jpg"
           ],
           "promoBadge": "Горящий тур",
           "promoNote": "Скидка до конца недели",
@@ -378,7 +378,7 @@
       "description": "Lake Kaindy is a 400-meter-long lake located in Kazakhstan. The lake reaches depths of nearly 30 meters. It is located 129 kilometers east-southeast of the city of Almaty and is 2,000 meters above sea level.",
       "price": 4600,
       "duration": "1",
-      "image": "https://upload.wikimedia.org/wikipedia/commons/2/26/Kaindy_lake_south-east_Kazakhstan.jpg",
+      "image": "/images/kyrgyzstan-mountains.jpg",
       "status": "hot",
       "rating": 4.8,
       "hasAccommodation": true,
