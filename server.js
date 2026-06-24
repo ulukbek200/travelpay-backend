@@ -121,6 +121,7 @@ const defaultDb = {
     },
   ],
   accommodations: [],
+  stayBookings: [],
   topupRequests: [],
 };
 
@@ -173,11 +174,12 @@ const getMongoDb = async ({ allowFallback = false } = {}) => {
 };
 
 const seedMongoIfEmpty = async (db) => {
-  const [companiesCount, usersCount, toursCount, accommodationsCount] = await Promise.all([
+  const [companiesCount, usersCount, toursCount, accommodationsCount, stayBookingsCount] = await Promise.all([
     db.collection('companies').countDocuments(),
     db.collection('users').countDocuments(),
     db.collection('tours').countDocuments(),
     db.collection('accommodations').countDocuments(),
+    db.collection('stayBookings').countDocuments(),
   ]);
 
   if (!companiesCount) {
@@ -195,6 +197,10 @@ const seedMongoIfEmpty = async (db) => {
   if (!accommodationsCount && defaultDb.accommodations.length) {
     await db.collection('accommodations').insertMany(defaultDb.accommodations);
   }
+
+  if (!stayBookingsCount && defaultDb.stayBookings.length) {
+    await db.collection('stayBookings').insertMany(defaultDb.stayBookings);
+  }
 };
 
 const readDb = async () => {
@@ -202,11 +208,12 @@ const readDb = async () => {
 
   if (mongoDb) {
     await seedMongoIfEmpty(mongoDb);
-    const [companies, users, tours, accommodations, topupRequests] = await Promise.all([
+    const [companies, users, tours, accommodations, stayBookings, topupRequests] = await Promise.all([
       mongoDb.collection('companies').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('users').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('tours').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('accommodations').find({}).sort({ id: 1 }).toArray(),
+      mongoDb.collection('stayBookings').find({}).sort({ createdAt: -1 }).toArray(),
       mongoDb.collection('topupRequests').find({}).sort({ createdAt: -1 }).toArray(),
     ]);
 
@@ -215,6 +222,7 @@ const readDb = async () => {
       users: users.map(stripMongoId).map(normalizeUser),
       tours: tours.map(stripMongoId).map(normalizeTour),
       accommodations: accommodations.map(stripMongoId).map(normalizeAccommodationEntity),
+      stayBookings: stayBookings.map(stripMongoId).map(normalizeStayBooking),
       topupRequests: topupRequests.map(stripMongoId).map(normalizeTopupRequest),
     };
   }
@@ -233,6 +241,9 @@ const readDb = async () => {
       accommodations: Array.isArray(parsed.accommodations)
         ? parsed.accommodations.map(normalizeAccommodationEntity)
         : [],
+      stayBookings: Array.isArray(parsed.stayBookings)
+        ? parsed.stayBookings.map(normalizeStayBooking)
+        : [],
       topupRequests: Array.isArray(parsed.topupRequests)
         ? parsed.topupRequests.map(normalizeTopupRequest)
         : [],
@@ -240,6 +251,7 @@ const readDb = async () => {
   } catch (error) {
     return {
       ...defaultDb,
+      stayBookings: [],
       topupRequests: [],
     };
   }
@@ -268,6 +280,7 @@ const saveDb = async (data) => {
   const companies = ensureArray(data.companies).map(stripMongoId);
   const tours = data.tours.map(stripMongoId);
   const accommodations = ensureArray(data.accommodations).map(stripMongoId);
+  const stayBookings = ensureArray(data.stayBookings).map(stripMongoId);
   const topupRequests = ensureArray(data.topupRequests).map(stripMongoId);
 
   await Promise.all([
@@ -275,6 +288,7 @@ const saveDb = async (data) => {
     mongoDb.collection('users').deleteMany({}),
     mongoDb.collection('tours').deleteMany({}),
     mongoDb.collection('accommodations').deleteMany({}),
+    mongoDb.collection('stayBookings').deleteMany({}),
     mongoDb.collection('topupRequests').deleteMany({}),
   ]);
 
@@ -283,6 +297,7 @@ const saveDb = async (data) => {
     users.length ? mongoDb.collection('users').insertMany(users) : Promise.resolve(),
     tours.length ? mongoDb.collection('tours').insertMany(tours) : Promise.resolve(),
     accommodations.length ? mongoDb.collection('accommodations').insertMany(accommodations) : Promise.resolve(),
+    stayBookings.length ? mongoDb.collection('stayBookings').insertMany(stayBookings) : Promise.resolve(),
     topupRequests.length ? mongoDb.collection('topupRequests').insertMany(topupRequests) : Promise.resolve(),
   ]);
 };
@@ -317,6 +332,7 @@ const normalizeCompanyId = (value, fallback = DEFAULT_COMPANY_ID) => {
 const COMPANY_STATUSES = new Set(['pending', 'active', 'rejected', 'blocked', 'inactive', 'archived']);
 const ACCOMMODATION_STATUSES = new Set(['available', 'sold_out', 'inactive']);
 const TOUR_CALENDAR_STATUSES = new Set(['scheduled', 'in_progress', 'completed', 'cancelled', 'sold_out']);
+const STAY_BOOKING_STATUSES = new Set(['pending', 'confirmed', 'cancelled', 'rejected']);
 
 const normalizeCompany = (company) => ({
   id: Number(company?.id) || 0,
@@ -378,6 +394,34 @@ const normalizeAccommodationEntity = (item) => ({
   linkedTourIds: ensureArray(item?.linkedTourIds).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
   status: ACCOMMODATION_STATUSES.has(item?.status) ? item.status : 'available',
 });
+
+const normalizeStayBooking = (booking) => {
+  const checkInDate = normalizeDateValue(booking?.checkInDate || booking?.date || booking?.bookingDate);
+  const checkOutDate = normalizeDateValue(booking?.checkOutDate || booking?.endDate);
+  const status = STAY_BOOKING_STATUSES.has(booking?.status) ? booking.status : 'pending';
+
+  return {
+    id: Number(booking?.id) || 0,
+    stayId: Number(booking?.stayId || booking?.accommodationId) || 0,
+    companyId: normalizeCompanyId(booking?.companyId),
+    companyName: normalizeString(booking?.companyName),
+    stayTitle: normalizeString(booking?.stayTitle || booking?.title),
+    location: normalizeString(booking?.location),
+    clientName: normalizeString(booking?.clientName || booking?.name),
+    clientPhone: normalizeString(booking?.clientPhone || booking?.phone),
+    clientEmail: normalizeString(booking?.clientEmail || booking?.email),
+    comment: normalizeString(booking?.comment),
+    guests: Math.max(Number(booking?.guests) || 1, 1),
+    checkInDate,
+    checkOutDate,
+    checkInTime: normalizeString(booking?.checkInTime, '14:00') || '14:00',
+    nights: Math.max(Number(booking?.nights) || 1, 1),
+    amount: Number(booking?.amount) || 0,
+    status,
+    createdAt: normalizeDateValue(booking?.createdAt) || new Date().toISOString(),
+    updatedAt: normalizeDateValue(booking?.updatedAt) || normalizeDateValue(booking?.createdAt) || new Date().toISOString(),
+  };
+};
 
 const toTourAccommodation = (item) => ({
   id: item.id,
@@ -1164,6 +1208,65 @@ const filterAccommodationsByScope = (accommodations, user) => {
   return accommodations.filter((item) => item.status === 'available');
 };
 
+const filterStayBookingsByScope = (bookings, user) => {
+  if (isSuperAdmin(user)) return bookings;
+  if (isCompanyStaff(user)) {
+    const companyId = getScopedCompanyId(user);
+    return bookings.filter((item) => normalizeCompanyId(item.companyId) === companyId);
+  }
+
+  return [];
+};
+
+const parseDay = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const addDateDays = (date, days) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const bookingOverlapsDate = (booking, date) => {
+  if (booking.status === 'cancelled' || booking.status === 'rejected') return false;
+  const start = parseDay(booking.checkInDate);
+  const end = parseDay(booking.checkOutDate || booking.checkInDate);
+  if (!start || !end) return false;
+  const normalized = parseDay(date);
+  return normalized >= start && normalized < end;
+};
+
+const getStayAvailabilityForDate = (stay, bookings, date) => {
+  const total = Math.max(Number(stay?.availableCount || stay?.totalCount || 1), 0);
+  const occupied = bookings.filter((booking) => Number(booking.stayId) === Number(stay?.id) && bookingOverlapsDate(booking, date)).length;
+  return Math.max(total - occupied, 0);
+};
+
+const buildStayAvailability = (stay, bookings, monthValue) => {
+  const month = monthValue ? new Date(`${monthValue}-01T00:00:00`) : new Date();
+  const today = parseDay(new Date());
+  const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
+  const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+  const visibleStart = today && today.getFullYear() === monthStart.getFullYear() && today.getMonth() === monthStart.getMonth()
+    ? today.getDate()
+    : 1;
+
+  return Array.from({ length: Math.max(daysInMonth - visibleStart + 1, 0) }, (_, index) => {
+    const date = new Date(monthStart.getFullYear(), monthStart.getMonth(), visibleStart + index);
+    const left = getStayAvailabilityForDate(stay, bookings, date);
+    return {
+      date: date.toISOString(),
+      key: date.toISOString().slice(0, 10),
+      left,
+      available: left > 0 && stay.status === 'available',
+    };
+  });
+};
+
 const buildTourResponse = (tour, accommodations = []) => {
   const embedded = ensureArray(tour.accommodations).map(toTourAccommodation);
   const linked = accommodations
@@ -1365,6 +1468,131 @@ app.delete('/accommodations/:id', asyncHandler(async (req, res) => {
   }));
   await saveDb(db);
   res.status(204).end();
+}));
+
+app.get('/stay-bookings/availability', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const stayId = Number(req.query.stayId);
+  const stay = ensureArray(db.accommodations).find((item) => Number(item.id) === stayId);
+
+  if (!stay) {
+    return res.status(404).json({ message: 'Домик не найден.' });
+  }
+
+  const bookings = ensureArray(db.stayBookings).map(normalizeStayBooking);
+  res.json(buildStayAvailability(stay, bookings, req.query.month));
+}));
+
+app.get('/stay-bookings', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  let result = filterStayBookingsByScope(ensureArray(db.stayBookings).map(normalizeStayBooking), currentUser);
+
+  if (req.query.stayId) {
+    const stayId = Number(req.query.stayId);
+    if (!currentUser) {
+      result = ensureArray(db.stayBookings)
+        .map(normalizeStayBooking)
+        .filter((booking) => Number(booking.stayId) === stayId)
+        .map((booking) => ({
+          id: booking.id,
+          stayId: booking.stayId,
+          checkInDate: booking.checkInDate,
+          checkOutDate: booking.checkOutDate,
+          status: booking.status,
+        }));
+      return res.json(result);
+    }
+
+    result = result.filter((booking) => Number(booking.stayId) === stayId);
+  }
+
+  res.json(result);
+}));
+
+app.post('/stay-bookings', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const stayId = Number(req.body.stayId);
+  const stay = ensureArray(db.accommodations).find((item) => Number(item.id) === stayId);
+
+  if (!stay || stay.status !== 'available') {
+    return res.status(404).json({ message: 'Домик недоступен для бронирования.' });
+  }
+
+  const checkIn = parseDay(req.body.checkInDate);
+  const nights = Math.max(Number(req.body.nights) || 1, 1);
+  const checkOut = req.body.checkOutDate ? parseDay(req.body.checkOutDate) : (checkIn ? addDateDays(checkIn, nights) : null);
+  const today = parseDay(new Date());
+
+  if (!checkIn || !checkOut || checkOut <= checkIn || checkIn < today) {
+    return res.status(400).json({ message: 'Выберите корректные даты проживания.' });
+  }
+
+  if (!normalizeString(req.body.clientName) || !normalizeString(req.body.clientPhone)) {
+    return res.status(400).json({ message: 'Укажите имя и телефон для связи.' });
+  }
+
+  const activeBookings = ensureArray(db.stayBookings).map(normalizeStayBooking);
+  for (let date = new Date(checkIn); date < checkOut; date = addDateDays(date, 1)) {
+    if (getStayAvailabilityForDate(stay, activeBookings, date) <= 0) {
+      return res.status(409).json({ message: 'На выбранные даты свободных домиков уже нет.' });
+    }
+  }
+
+  const company = ensureArray(db.companies).find((item) => Number(item.id) === normalizeCompanyId(stay.companyId));
+  const booking = normalizeStayBooking({
+    ...req.body,
+    id: nextId(ensureArray(db.stayBookings)),
+    stayId: stay.id,
+    companyId: stay.companyId,
+    companyName: stay.companyName || company?.name || '',
+    stayTitle: stay.title || stay.name,
+    location: stay.location,
+    checkInDate: checkIn.toISOString(),
+    checkOutDate: checkOut.toISOString(),
+    nights: Math.max(Math.ceil((checkOut - checkIn) / DAY_MS), 1),
+    amount: Number(req.body.amount) || (Number(stay.pricePerNight || 0) * Math.max(Math.ceil((checkOut - checkIn) / DAY_MS), 1)),
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  db.stayBookings = ensureArray(db.stayBookings);
+  db.stayBookings.push(booking);
+  await saveDb(db);
+  res.status(201).json(booking);
+}));
+
+app.put('/stay-bookings/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!requireAdminUser(currentUser, res)) {
+    return;
+  }
+
+  const id = Number(req.params.id);
+  const index = ensureArray(db.stayBookings).findIndex((item) => Number(item.id) === id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: 'Бронь домика не найдена.' });
+  }
+
+  if (!canAccessCompany(currentUser, db.stayBookings[index].companyId)) {
+    return res.status(403).json({ message: 'Нельзя изменять брони другой компании.' });
+  }
+
+  db.stayBookings[index] = normalizeStayBooking({
+    ...db.stayBookings[index],
+    ...req.body,
+    id,
+    stayId: db.stayBookings[index].stayId,
+    companyId: db.stayBookings[index].companyId,
+    updatedAt: new Date().toISOString(),
+  });
+
+  await saveDb(db);
+  res.json(db.stayBookings[index]);
 }));
 
 app.get('/tours', asyncHandler(async (req, res) => {
