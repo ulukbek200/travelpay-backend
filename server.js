@@ -361,6 +361,7 @@ const normalizeAccommodationEntity = (item) => ({
   ...item,
   id: Number(item?.id) || 0,
   companyId: normalizeCompanyId(item?.companyId),
+  companyName: normalizeString(item?.companyName),
   title: normalizeString(item?.title || item?.name || 'Accommodation'),
   name: normalizeString(item?.name || item?.title || 'Accommodation'),
   description: normalizeString(item?.description),
@@ -1258,7 +1259,11 @@ app.get('/accommodations', asyncHandler(async (req, res) => {
     result = result.filter((item) => item.linkedTourIds.includes(normalizedTourId));
   }
 
-  res.json(result);
+  const companiesById = new Map((db.companies || []).map((company) => [normalizeCompanyId(company.id), company]));
+  res.json(result.map((item) => ({
+    ...item,
+    companyName: item.companyName || companiesById.get(normalizeCompanyId(item.companyId))?.name || '',
+  })));
 }));
 
 app.post('/accommodations', asyncHandler(async (req, res) => {
@@ -1276,10 +1281,12 @@ app.post('/accommodations', asyncHandler(async (req, res) => {
   const companyId = isSuperAdmin(currentUser)
     ? normalizeCompanyId(req.body.companyId)
     : getScopedCompanyId(currentUser);
+  const company = db.companies.find((item) => Number(item.id) === companyId);
   const accommodation = normalizeAccommodationEntity({
     ...req.body,
     id: nextId(db.accommodations || []),
     companyId,
+    companyName: company?.name || req.body.companyName || '',
   });
 
   if (!accommodation.title || !accommodation.location || !accommodation.pricePerNight) {
@@ -1318,12 +1325,14 @@ app.put('/accommodations/:id', asyncHandler(async (req, res) => {
   const companyId = isSuperAdmin(currentUser)
     ? normalizeCompanyId(req.body.companyId ?? db.accommodations[index].companyId)
     : getScopedCompanyId(currentUser);
+  const company = db.companies.find((item) => Number(item.id) === companyId);
 
   db.accommodations[index] = normalizeAccommodationEntity({
     ...db.accommodations[index],
     ...req.body,
     id,
     companyId,
+    companyName: company?.name || db.accommodations[index].companyName || req.body.companyName || '',
   });
 
   await saveDb(db);
