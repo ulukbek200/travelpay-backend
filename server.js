@@ -41,6 +41,9 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'travelpay';
 let mongoClientPromise;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SUBSCRIPTION_MONTH_DAYS = 30;
+const BUSINESS_SUBSCRIPTION_PRICE = 14900;
+const BUSINESS_CONTRACT_VERSION = 'business-2026-06';
 const DEFAULT_COMPANY_ID = 1;
 const DEFAULT_AVATAR = 'https://www.w3schools.com/howto/img_avatar.png';
 const ADMIN_ROLES = new Set(['super_admin', 'company_admin', 'company_manager']);
@@ -122,7 +125,9 @@ const defaultDb = {
   ],
   accommodations: [],
   stayBookings: [],
+  tourBookings: [],
   topupRequests: [],
+  businessSubscriptionRequests: [],
 };
 
 const ensureDb = () => {
@@ -174,12 +179,14 @@ const getMongoDb = async ({ allowFallback = false } = {}) => {
 };
 
 const seedMongoIfEmpty = async (db) => {
-  const [companiesCount, usersCount, toursCount, accommodationsCount, stayBookingsCount] = await Promise.all([
+  const [companiesCount, usersCount, toursCount, accommodationsCount, stayBookingsCount, tourBookingsCount, businessSubscriptionRequestsCount] = await Promise.all([
     db.collection('companies').countDocuments(),
     db.collection('users').countDocuments(),
     db.collection('tours').countDocuments(),
     db.collection('accommodations').countDocuments(),
     db.collection('stayBookings').countDocuments(),
+    db.collection('tourBookings').countDocuments(),
+    db.collection('businessSubscriptionRequests').countDocuments(),
   ]);
 
   if (!companiesCount) {
@@ -201,6 +208,14 @@ const seedMongoIfEmpty = async (db) => {
   if (!stayBookingsCount && defaultDb.stayBookings.length) {
     await db.collection('stayBookings').insertMany(defaultDb.stayBookings);
   }
+
+  if (!tourBookingsCount && defaultDb.tourBookings.length) {
+    await db.collection('tourBookings').insertMany(defaultDb.tourBookings);
+  }
+
+  if (!businessSubscriptionRequestsCount && defaultDb.businessSubscriptionRequests.length) {
+    await db.collection('businessSubscriptionRequests').insertMany(defaultDb.businessSubscriptionRequests);
+  }
 };
 
 const readDb = async () => {
@@ -208,13 +223,15 @@ const readDb = async () => {
 
   if (mongoDb) {
     await seedMongoIfEmpty(mongoDb);
-    const [companies, users, tours, accommodations, stayBookings, topupRequests] = await Promise.all([
+    const [companies, users, tours, accommodations, stayBookings, tourBookings, topupRequests, businessSubscriptionRequests] = await Promise.all([
       mongoDb.collection('companies').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('users').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('tours').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('accommodations').find({}).sort({ id: 1 }).toArray(),
       mongoDb.collection('stayBookings').find({}).sort({ createdAt: -1 }).toArray(),
+      mongoDb.collection('tourBookings').find({}).sort({ createdAt: -1 }).toArray(),
       mongoDb.collection('topupRequests').find({}).sort({ createdAt: -1 }).toArray(),
+      mongoDb.collection('businessSubscriptionRequests').find({}).sort({ createdAt: -1 }).toArray(),
     ]);
 
     return {
@@ -223,7 +240,9 @@ const readDb = async () => {
       tours: tours.map(stripMongoId).map(normalizeTour),
       accommodations: accommodations.map(stripMongoId).map(normalizeAccommodationEntity),
       stayBookings: stayBookings.map(stripMongoId).map(normalizeStayBooking),
+      tourBookings: tourBookings.map(stripMongoId).map(normalizeTourBooking),
       topupRequests: topupRequests.map(stripMongoId).map(normalizeTopupRequest),
+      businessSubscriptionRequests: businessSubscriptionRequests.map(stripMongoId).map(normalizeBusinessSubscriptionRequest),
     };
   }
 
@@ -244,15 +263,23 @@ const readDb = async () => {
       stayBookings: Array.isArray(parsed.stayBookings)
         ? parsed.stayBookings.map(normalizeStayBooking)
         : [],
+      tourBookings: Array.isArray(parsed.tourBookings)
+        ? parsed.tourBookings.map(normalizeTourBooking)
+        : [],
       topupRequests: Array.isArray(parsed.topupRequests)
         ? parsed.topupRequests.map(normalizeTopupRequest)
+        : [],
+      businessSubscriptionRequests: Array.isArray(parsed.businessSubscriptionRequests)
+        ? parsed.businessSubscriptionRequests.map(normalizeBusinessSubscriptionRequest)
         : [],
     };
   } catch (error) {
     return {
       ...defaultDb,
       stayBookings: [],
+      tourBookings: [],
       topupRequests: [],
+      businessSubscriptionRequests: [],
     };
   }
 };
@@ -281,7 +308,9 @@ const saveDb = async (data) => {
   const tours = data.tours.map(stripMongoId);
   const accommodations = ensureArray(data.accommodations).map(stripMongoId);
   const stayBookings = ensureArray(data.stayBookings).map(stripMongoId);
+  const tourBookings = ensureArray(data.tourBookings).map(stripMongoId);
   const topupRequests = ensureArray(data.topupRequests).map(stripMongoId);
+  const businessSubscriptionRequests = ensureArray(data.businessSubscriptionRequests).map(stripMongoId);
 
   await Promise.all([
     mongoDb.collection('companies').deleteMany({}),
@@ -289,7 +318,9 @@ const saveDb = async (data) => {
     mongoDb.collection('tours').deleteMany({}),
     mongoDb.collection('accommodations').deleteMany({}),
     mongoDb.collection('stayBookings').deleteMany({}),
+    mongoDb.collection('tourBookings').deleteMany({}),
     mongoDb.collection('topupRequests').deleteMany({}),
+    mongoDb.collection('businessSubscriptionRequests').deleteMany({}),
   ]);
 
   await Promise.all([
@@ -298,7 +329,9 @@ const saveDb = async (data) => {
     tours.length ? mongoDb.collection('tours').insertMany(tours) : Promise.resolve(),
     accommodations.length ? mongoDb.collection('accommodations').insertMany(accommodations) : Promise.resolve(),
     stayBookings.length ? mongoDb.collection('stayBookings').insertMany(stayBookings) : Promise.resolve(),
+    tourBookings.length ? mongoDb.collection('tourBookings').insertMany(tourBookings) : Promise.resolve(),
     topupRequests.length ? mongoDb.collection('topupRequests').insertMany(topupRequests) : Promise.resolve(),
+    businessSubscriptionRequests.length ? mongoDb.collection('businessSubscriptionRequests').insertMany(businessSubscriptionRequests) : Promise.resolve(),
   ]);
 };
 
@@ -330,9 +363,12 @@ const normalizeCompanyId = (value, fallback = DEFAULT_COMPANY_ID) => {
 };
 
 const COMPANY_STATUSES = new Set(['pending', 'active', 'rejected', 'blocked', 'inactive', 'archived']);
+const COMPANY_SUBSCRIPTION_STATUSES = new Set(['pending_payment', 'payment_review', 'active', 'expired', 'rejected']);
+const BUSINESS_SUBSCRIPTION_REQUEST_STATUSES = new Set(['pending', 'approved', 'rejected']);
 const ACCOMMODATION_STATUSES = new Set(['available', 'sold_out', 'inactive']);
 const TOUR_CALENDAR_STATUSES = new Set(['scheduled', 'in_progress', 'completed', 'cancelled', 'sold_out']);
-const STAY_BOOKING_STATUSES = new Set(['pending', 'confirmed', 'cancelled', 'rejected']);
+const STAY_BOOKING_STATUSES = new Set(['pending', 'pending_payment', 'payment_review', 'confirmed', 'cancelled', 'rejected']);
+const TOUR_BOOKING_STATUSES = new Set(['pending_payment', 'payment_review', 'confirmed', 'completed', 'cancelled', 'rejected']);
 
 const normalizeCompany = (company) => ({
   id: Number(company?.id) || 0,
@@ -342,42 +378,95 @@ const normalizeCompany = (company) => ({
   email: normalizeString(company?.email).toLowerCase(),
   city: normalizeString(company?.city),
   address: normalizeString(company?.address),
+  instagramUrl: normalizeString(company?.instagramUrl),
   description: normalizeString(company?.description),
   documents: ensureArray(company?.documents).map((item) => normalizeString(item)).filter(Boolean),
+  passportImage: normalizeString(company?.passportImage),
+  passportName: normalizeString(company?.passportName),
+  passportType: normalizeString(company?.passportType),
   ownerId: Number(company?.ownerId) || null,
   rejectionReason: normalizeString(company?.rejectionReason),
   createdAt: normalizeDateValue(company?.createdAt) || new Date().toISOString(),
   updatedAt: normalizeDateValue(company?.updatedAt) || new Date().toISOString(),
   status: COMPANY_STATUSES.has(company?.status) ? company.status : 'active',
+  verified: company?.verified !== undefined ? Boolean(company.verified) : COMPANY_STATUSES.has(company?.status) ? company.status === 'active' : true,
+  contractAccepted: Boolean(company?.contractAccepted),
+  contractAcceptedAt: normalizeDateValue(company?.contractAcceptedAt),
+  contractVersion: normalizeString(company?.contractVersion, BUSINESS_CONTRACT_VERSION) || BUSINESS_CONTRACT_VERSION,
+  subscriptionPlan: normalizeString(company?.subscriptionPlan, 'business_monthly') || 'business_monthly',
+  subscriptionPrice: Number(company?.subscriptionPrice) || BUSINESS_SUBSCRIPTION_PRICE,
+  subscriptionStatus: COMPANY_SUBSCRIPTION_STATUSES.has(company?.subscriptionStatus) ? company.subscriptionStatus : 'pending_payment',
+  subscriptionStartedAt: normalizeDateValue(company?.subscriptionStartedAt),
+  subscriptionExpiresAt: normalizeDateValue(company?.subscriptionExpiresAt),
+  subscriptionPaidAt: normalizeDateValue(company?.subscriptionPaidAt),
+  subscriptionLastRequestId: Number(company?.subscriptionLastRequestId) || null,
 });
 
-const normalizeTour = (tour) => ({
-  ...tour,
-  companyId: normalizeCompanyId(tour.companyId),
-  companyName: normalizeString(tour.companyName),
-  accommodationIds: ensureArray(tour.accommodationIds).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
-  title: String(tour.title || '').trim(),
-  description: String(tour.description || '').trim(),
-  duration: String(tour.duration || '').trim(),
-  location: String(tour.location || '').trim(),
-  image: String(tour.image || '').trim(),
-  price: Number(tour.price) || 0,
-  startDate: normalizeDateValue(tour.startDate || tour.dateStart || tour.departureDate || tour.date),
-  endDate: normalizeDateValue(tour.endDate || tour.dateEnd || tour.returnDate || tour.startDate || tour.date),
-  route: normalizeString(tour.route || tour.location),
-  manager: normalizeString(tour.manager),
-  totalSeats: Math.max(Number(tour.totalSeats || tour.seats || tour.capacity) || 20, 1),
-  bookedSeats: Math.max(Number(tour.bookedSeats) || 0, 0),
-  calendarStatus: TOUR_CALENDAR_STATUSES.has(tour.calendarStatus || tour.tripStatus || tour.scheduleStatus)
-    ? (tour.calendarStatus || tour.tripStatus || tour.scheduleStatus)
-    : 'scheduled',
+const getCompanyBrandFields = (company) => ({
+  companyId: normalizeCompanyId(company?.id),
+  companyName: normalizeString(company?.name, 'TravelPay Partner'),
+  companyLogo: normalizeString(company?.logo),
+  companyCity: normalizeString(company?.city || company?.address, 'Kyrgyzstan'),
+  companyVerified: company?.verified !== undefined ? Boolean(company.verified) : normalizeString(company?.status, 'active') === 'active',
+  createdByBusiness: Boolean(company),
 });
+
+const normalizeTour = (tour) => {
+  const legacyStart = normalizeDateValue(tour.startDate || tour.dateStart || tour.departureDate || tour.date);
+  const rawSlots = ensureArray(tour.departureSlots);
+  const departureSlots = (rawSlots.length ? rawSlots : (legacyStart ? [{
+    id: `legacy-${tour.id || 'tour'}`,
+    startAt: legacyStart,
+    seats: tour.totalSeats || tour.seats || tour.capacity || 20,
+    active: true,
+  }] : []))
+    .map((slot, index) => ({
+      id: normalizeString(slot?.id, `departure-${index + 1}`),
+      startAt: normalizeDateValue(slot?.startAt || slot?.date || slot?.departureDate),
+      seats: Math.max(Number(slot?.seats || slot?.capacity || slot?.totalSeats) || 1, 1),
+      active: slot?.active !== false,
+    }))
+    .filter((slot) => slot.startAt)
+    .sort((left, right) => new Date(left.startAt) - new Date(right.startAt));
+  const firstDeparture = departureSlots[0];
+
+  return {
+    ...tour,
+    companyId: normalizeCompanyId(tour.companyId),
+    companyName: normalizeString(tour.companyName),
+    companyLogo: normalizeString(tour.companyLogo),
+    companyCity: normalizeString(tour.companyCity),
+    companyVerified: Boolean(tour.companyVerified),
+    createdByBusiness: Boolean(tour.createdByBusiness),
+    accommodationIds: ensureArray(tour.accommodationIds).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
+    title: String(tour.title || '').trim(),
+    description: String(tour.description || '').trim(),
+    duration: String(tour.duration || '').trim(),
+    location: String(tour.location || '').trim(),
+    image: String(tour.image || '').trim(),
+    price: Number(tour.price) || 0,
+    departureSlots,
+    startDate: firstDeparture?.startAt || legacyStart,
+    endDate: normalizeDateValue(tour.endDate || tour.dateEnd || tour.returnDate || firstDeparture?.startAt || legacyStart),
+    route: normalizeString(tour.route || tour.location),
+    manager: normalizeString(tour.manager),
+    totalSeats: departureSlots.reduce((sum, slot) => sum + slot.seats, 0) || Math.max(Number(tour.totalSeats || tour.seats || tour.capacity) || 20, 1),
+    bookedSeats: Math.max(Number(tour.bookedSeats) || 0, 0),
+    calendarStatus: TOUR_CALENDAR_STATUSES.has(tour.calendarStatus || tour.tripStatus || tour.scheduleStatus)
+      ? (tour.calendarStatus || tour.tripStatus || tour.scheduleStatus)
+      : 'scheduled',
+  };
+};
 
 const normalizeAccommodationEntity = (item) => ({
   ...item,
   id: Number(item?.id) || 0,
   companyId: normalizeCompanyId(item?.companyId),
   companyName: normalizeString(item?.companyName),
+  companyLogo: normalizeString(item?.companyLogo),
+  companyCity: normalizeString(item?.companyCity),
+  companyVerified: Boolean(item?.companyVerified),
+  createdByBusiness: Boolean(item?.createdByBusiness),
   title: normalizeString(item?.title || item?.name || 'Accommodation'),
   name: normalizeString(item?.name || item?.title || 'Accommodation'),
   description: normalizeString(item?.description),
@@ -391,6 +480,22 @@ const normalizeAccommodationEntity = (item) => ({
   type: normalizeString(item?.type, 'standard') || 'standard',
   extraBedAvailable: Boolean(item?.extraBedAvailable),
   extraBedPrice: Number(item?.extraBedPrice) || 0,
+  extraServices: ensureArray(item?.extraServices).map((service, index) => ({
+    id: normalizeString(service?.id, `service-${index + 1}`),
+    title: normalizeString(service?.title || service?.name, `Услуга ${index + 1}`),
+    description: normalizeString(service?.description),
+    type: ['toggle', 'quantity', 'select'].includes(service?.type) ? service.type : 'toggle',
+    price: Math.max(Number(service?.price) || 0, 0),
+    maxQuantity: Math.max(Number(service?.maxQuantity) || 1, 1),
+    unitLabel: normalizeString(service?.unitLabel, 'шт.'),
+    active: service?.active !== false,
+    sortOrder: Number(service?.sortOrder) || index,
+    options: ensureArray(service?.options).map((option, optionIndex) => ({
+      id: normalizeString(option?.id, `option-${optionIndex + 1}`),
+      label: normalizeString(option?.label || option?.title, `Опция ${optionIndex + 1}`),
+      price: Math.max(Number(option?.price) || 0, 0),
+    })).filter((option) => option.label),
+  })).sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0)),
   linkedTourIds: ensureArray(item?.linkedTourIds).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
   status: ACCOMMODATION_STATUSES.has(item?.status) ? item.status : 'available',
 });
@@ -398,7 +503,9 @@ const normalizeAccommodationEntity = (item) => ({
 const normalizeStayBooking = (booking) => {
   const checkInDate = normalizeDateValue(booking?.checkInDate || booking?.date || booking?.bookingDate);
   const checkOutDate = normalizeDateValue(booking?.checkOutDate || booking?.endDate);
-  const status = STAY_BOOKING_STATUSES.has(booking?.status) ? booking.status : 'pending';
+  const status = STAY_BOOKING_STATUSES.has(booking?.status) ? booking.status : 'pending_payment';
+  const startTime = normalizeString(booking?.startTime || booking?.checkInTime, '14:00') || '14:00';
+  const endTime = normalizeString(booking?.endTime || booking?.checkOutTime, '16:00') || '16:00';
 
   return {
     id: Number(booking?.id) || 0,
@@ -414,10 +521,34 @@ const normalizeStayBooking = (booking) => {
     guests: Math.max(Number(booking?.guests) || 1, 1),
     checkInDate,
     checkOutDate,
-    checkInTime: normalizeString(booking?.checkInTime, '14:00') || '14:00',
+    checkInTime: startTime,
+    startTime,
+    endTime,
     nights: Math.max(Number(booking?.nights) || 1, 1),
     amount: Number(booking?.amount) || 0,
+    baseAmount: Number(booking?.baseAmount) || 0,
+    extrasAmount: Number(booking?.extrasAmount) || 0,
+    prepaymentAmount: Number(booking?.prepaymentAmount) || 0,
+    prepaymentPercent: Number(booking?.prepaymentPercent) || 0,
+    extras: ensureArray(booking?.extras).map((extra) => ({
+      serviceId: normalizeString(extra?.serviceId),
+      title: normalizeString(extra?.title),
+      type: normalizeString(extra?.type),
+      quantity: Math.max(Number(extra?.quantity) || 0, 0),
+      selected: Boolean(extra?.selected),
+      selectedOptionId: normalizeString(extra?.selectedOptionId),
+      selectedOptionLabel: normalizeString(extra?.selectedOptionLabel),
+      unitPrice: Math.max(Number(extra?.unitPrice) || 0, 0),
+      total: Math.max(Number(extra?.total) || 0, 0),
+    })).filter((extra) => extra.serviceId && extra.title),
     status,
+    paymentStatus: normalizeString(booking?.paymentStatus, status === 'confirmed' ? 'paid' : status === 'rejected' ? 'rejected' : 'review') || 'review',
+    paymentReceiptUrl: normalizeString(booking?.paymentReceiptUrl || booking?.receiptImage),
+    paymentReceiptName: normalizeString(booking?.paymentReceiptName || booking?.receiptName),
+    paymentReceiptType: normalizeString(booking?.paymentReceiptType || booking?.receiptType),
+    rejectionReason: normalizeString(booking?.rejectionReason),
+    paymentReviewedAt: normalizeDateValue(booking?.paymentReviewedAt),
+    paymentReviewedBy: Number(booking?.paymentReviewedBy) || null,
     createdAt: normalizeDateValue(booking?.createdAt) || new Date().toISOString(),
     updatedAt: normalizeDateValue(booking?.updatedAt) || normalizeDateValue(booking?.createdAt) || new Date().toISOString(),
   };
@@ -436,6 +567,7 @@ const toTourAccommodation = (item) => ({
   amenities: ensureArray(item.amenities),
   extraBedAvailable: Boolean(item.extraBedAvailable),
   extraBedPrice: Number(item.extraBedPrice || 0),
+  extraServices: ensureArray(item.extraServices),
   status: item.status || 'available',
   location: item.location || '',
 });
@@ -524,6 +656,32 @@ const normalizeTopupRequest = (request) => {
   };
 };
 
+const normalizeBusinessSubscriptionRequest = (request) => ({
+  id: Number(request?.id) || 0,
+  companyId: normalizeCompanyId(request?.companyId),
+  companyName: normalizeString(request?.companyName),
+  ownerUserId: Number(request?.ownerUserId) || null,
+  ownerName: normalizeString(request?.ownerName),
+  ownerEmail: normalizeString(request?.ownerEmail).toLowerCase(),
+  plan: normalizeString(request?.plan, 'business_monthly') || 'business_monthly',
+  months: Math.max(Number(request?.months) || 1, 1),
+  amount: Number(request?.amount) || BUSINESS_SUBSCRIPTION_PRICE,
+  status: BUSINESS_SUBSCRIPTION_REQUEST_STATUSES.has(request?.status) ? request.status : 'pending',
+  receiptImage: normalizeString(request?.receiptImage),
+  receiptName: normalizeString(request?.receiptName),
+  receiptType: normalizeString(request?.receiptType),
+  passportImage: normalizeString(request?.passportImage),
+  passportName: normalizeString(request?.passportName),
+  passportType: normalizeString(request?.passportType),
+  instagramUrl: normalizeString(request?.instagramUrl),
+  contractVersion: normalizeString(request?.contractVersion, BUSINESS_CONTRACT_VERSION) || BUSINESS_CONTRACT_VERSION,
+  comment: normalizeString(request?.comment),
+  adminComment: normalizeString(request?.adminComment),
+  createdAt: normalizeDateValue(request?.createdAt) || new Date().toISOString(),
+  reviewedAt: normalizeDateValue(request?.reviewedAt),
+  reviewedBy: Number(request?.reviewedBy) || null,
+});
+
 const normalizeBooking = (booking) => ({
   id: booking?.id || createId('booking'),
   tourId: booking?.tourId || booking?.id || '',
@@ -551,6 +709,58 @@ const normalizeBooking = (booking) => ({
   extraBedTotal: Number(booking?.extraBedTotal) || 0,
   baseTourAmount: Number(booking?.baseTourAmount) || 0,
 });
+
+const normalizeTourBooking = (booking) => {
+  const status = TOUR_BOOKING_STATUSES.has(booking?.status) ? booking.status : 'pending_payment';
+  return {
+    id: Number(booking?.id) || 0,
+    userId: Number(booking?.userId) || 0,
+    tourId: Number(booking?.tourId) || 0,
+    departureSlotId: normalizeString(booking?.departureSlotId),
+    companyId: normalizeCompanyId(booking?.companyId),
+    companyName: normalizeString(booking?.companyName),
+    tourTitle: normalizeString(booking?.tourTitle || booking?.title),
+    location: normalizeString(booking?.location),
+    image: normalizeString(booking?.image),
+    clientName: normalizeString(booking?.clientName || booking?.name),
+    clientPhone: normalizeString(booking?.clientPhone || booking?.phone),
+    clientEmail: normalizeString(booking?.clientEmail || booking?.email),
+    people: Math.max(Number(booking?.people) || 1, 1),
+    transport: normalizeString(booking?.transport, 'comfort') || 'comfort',
+    guide: normalizeString(booking?.guide, 'group') || 'group',
+    comment: normalizeString(booking?.comment),
+    travelDate: normalizeDateValue(booking?.travelDate || booking?.date),
+    departureTime: normalizeString(booking?.departureTime || booking?.time, '09:00') || '09:00',
+    endDate: normalizeDateValue(booking?.endDate),
+    durationMinutes: Number(booking?.durationMinutes) || 24 * 60,
+    baseTourAmount: Number(booking?.baseTourAmount) || 0,
+    accommodation: booking?.accommodation || null,
+    accommodationTotal: Number(booking?.accommodationTotal) || 0,
+    extraBedSelected: Boolean(booking?.extraBedSelected),
+    extraBedTotal: Number(booking?.extraBedTotal) || 0,
+    amount: Number(booking?.amount) || 0,
+    prepaymentPercent: Number(booking?.prepaymentPercent) || 0,
+    prepaymentAmount: Number(booking?.prepaymentAmount) || 0,
+    remainingAmount: Math.max(Number(booking?.remainingAmount) || 0, 0),
+    status,
+    paymentMethod: normalizeString(booking?.paymentMethod, 'receipt') || 'receipt',
+    paymentStatus: normalizeString(
+      booking?.paymentStatus,
+      status === 'confirmed' ? 'paid' : status === 'rejected' ? 'rejected' : 'pending',
+    ) || 'pending',
+    paymentReceiptUrl: normalizeString(booking?.paymentReceiptUrl || booking?.receiptImage),
+    paymentReceiptName: normalizeString(booking?.paymentReceiptName || booking?.receiptName),
+    paymentReceiptType: normalizeString(booking?.paymentReceiptType || booking?.receiptType),
+    rejectionReason: normalizeString(booking?.rejectionReason),
+    cancellationReason: normalizeString(booking?.cancellationReason),
+    cancelledAt: normalizeDateValue(booking?.cancelledAt),
+    refundedAmount: Number(booking?.refundedAmount) || 0,
+    paymentReviewedAt: normalizeDateValue(booking?.paymentReviewedAt),
+    paymentReviewedBy: Number(booking?.paymentReviewedBy) || null,
+    createdAt: normalizeDateValue(booking?.createdAt) || new Date().toISOString(),
+    updatedAt: normalizeDateValue(booking?.updatedAt || booking?.createdAt) || new Date().toISOString(),
+  };
+};
 
 const normalizeNotification = (item) => ({
   id: item?.id || createId('notification'),
@@ -1037,6 +1247,55 @@ const getScopedCompanyId = (user) => (isCompanyStaff(user) ? normalizeCompanyId(
 const canAccessCompany = (user, companyId) => isSuperAdmin(user) || getScopedCompanyId(user) === normalizeCompanyId(companyId);
 const findUserCompany = (db, user) => db.companies.find((company) => Number(company.id) === normalizeCompanyId(user?.companyId));
 const isCompanyActive = (company) => normalizeString(company?.status, 'active') === 'active';
+const isCompanySubscriptionActive = (company) => {
+  if (normalizeString(company?.subscriptionStatus) !== 'active') return false;
+  const expiresAt = new Date(company?.subscriptionExpiresAt || '').getTime();
+  return !Number.isNaN(expiresAt) && expiresAt > Date.now();
+};
+
+const syncCompanySubscription = (company) => {
+  const normalized = normalizeCompany(company);
+  if (normalized.subscriptionStatus !== 'active') return normalized;
+
+  const expiresAt = new Date(normalized.subscriptionExpiresAt || '').getTime();
+  if (Number.isNaN(expiresAt) || expiresAt > Date.now()) return normalized;
+
+  return normalizeCompany({
+    ...normalized,
+    subscriptionStatus: 'expired',
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+const appendNotification = (notifications = [], item) => [
+  normalizeNotification({
+    id: createId('notification'),
+    date: new Date().toISOString(),
+    read: false,
+    ...item,
+  }),
+  ...ensureArray(notifications),
+];
+
+const notifyUsers = (db, predicate, notification) => {
+  db.users = ensureArray(db.users).map((user) => (
+    predicate(user)
+      ? normalizeUser({ ...user, notifications: appendNotification(user.notifications, notification) })
+      : user
+  ));
+};
+
+const syncAllCompanySubscriptions = (db) => {
+  let changed = false;
+  db.companies = ensureArray(db.companies).map((company) => {
+    const nextCompany = syncCompanySubscription(company);
+    if (nextCompany.subscriptionStatus !== company.subscriptionStatus || nextCompany.updatedAt !== company.updatedAt) {
+      changed = true;
+    }
+    return nextCompany;
+  });
+  return changed;
+};
 
 app.post('/business/register', asyncHandler(async (req, res) => {
   const db = await readDb();
@@ -1044,9 +1303,32 @@ app.post('/business/register', asyncHandler(async (req, res) => {
   const password = normalizeString(req.body.password);
   const companyName = normalizeString(req.body.companyName || req.body.name);
   const ownerName = normalizeString(req.body.ownerName);
+  const instagramUrl = normalizeString(req.body.instagramUrl);
+  const receiptImage = normalizeString(req.body.receiptImage);
+  const passportImage = normalizeString(req.body.passportImage);
 
   if (!companyName || !ownerName || !email || !password) {
     return res.status(400).json({ message: 'Укажите компанию, владельца, email и пароль.' });
+  }
+
+  if (!req.body.agreementAccepted || !req.body.contractAccepted) {
+    return res.status(400).json({ message: 'Нужно принять договор и условия подписки TravelPay Business.' });
+  }
+
+  if (!instagramUrl) {
+    return res.status(400).json({ message: 'Добавьте ссылку на Instagram компании.' });
+  }
+
+  if (!/^https?:\/\//i.test(instagramUrl)) {
+    return res.status(400).json({ message: 'Ссылка на Instagram должна начинаться с http:// или https://.' });
+  }
+
+  if (!passportImage || !/^data:(image\/(jpeg|jpg|png)|application\/pdf);base64,/i.test(passportImage)) {
+    return res.status(400).json({ message: 'Загрузите паспорт владельца в формате JPG, PNG или PDF.' });
+  }
+
+  if (!receiptImage || !/^data:(image\/(jpeg|jpg|png)|application\/pdf);base64,/i.test(receiptImage)) {
+    return res.status(400).json({ message: 'Загрузите чек оплаты подписки в формате JPG, PNG или PDF.' });
   }
 
   if (db.users.some((user) => String(user.email).toLowerCase() === email)) {
@@ -1068,10 +1350,21 @@ app.post('/business/register', asyncHandler(async (req, res) => {
     email,
     city: req.body.city,
     address: req.body.address,
+    instagramUrl,
     description: req.body.description,
     logo: req.body.logo,
     documents: req.body.documents,
+    passportImage,
+    passportName: req.body.passportName,
+    passportType: req.body.passportType,
     status: 'pending',
+    verified: false,
+    contractAccepted: true,
+    contractAcceptedAt: now,
+    contractVersion: BUSINESS_CONTRACT_VERSION,
+    subscriptionPlan: 'business_monthly',
+    subscriptionPrice: BUSINESS_SUBSCRIPTION_PRICE,
+    subscriptionStatus: 'payment_review',
     createdAt: now,
     updatedAt: now,
   });
@@ -1092,10 +1385,45 @@ app.post('/business/register', asyncHandler(async (req, res) => {
 
   db.companies.push(company);
   db.users.push(user);
+  db.businessSubscriptionRequests = ensureArray(db.businessSubscriptionRequests);
+  const request = normalizeBusinessSubscriptionRequest({
+    id: nextId(db.businessSubscriptionRequests),
+    companyId,
+    companyName,
+    ownerUserId: userId,
+    ownerName,
+    ownerEmail: email,
+    plan: 'business_monthly',
+    months: 1,
+    amount: BUSINESS_SUBSCRIPTION_PRICE,
+    status: 'pending',
+    receiptImage,
+    receiptName: req.body.receiptName,
+    receiptType: req.body.receiptType,
+    passportImage,
+    passportName: req.body.passportName,
+    passportType: req.body.passportType,
+    instagramUrl,
+    comment: req.body.comment,
+    contractVersion: BUSINESS_CONTRACT_VERSION,
+    createdAt: now,
+  });
+  db.businessSubscriptionRequests.push(request);
+  db.companies = db.companies.map((item) => (
+    Number(item.id) === Number(companyId)
+      ? normalizeCompany({ ...item, subscriptionLastRequestId: request.id, updatedAt: now })
+      : item
+  ));
+  notifyUsers(db, (item) => normalizeRole(item?.role) === 'super_admin', {
+    type: 'business-registration',
+    title: 'Новая заявка на компанию',
+    description: `${companyName} отправила договор, паспорт, Instagram и оплату подписки на проверку.`,
+  });
   await saveDb(db);
   res.status(201).json({
-    message: 'Заявка компании отправлена. После проверки вы сможете публиковать туры.',
-    company,
+    message: 'Заявка компании отправлена super admin на проверку.',
+    company: db.companies.find((item) => Number(item.id) === Number(companyId)),
+    request,
     user: sanitizeUser(user),
   });
 }));
@@ -1121,30 +1449,245 @@ app.post('/business/login', asyncHandler(async (req, res) => {
     return res.status(403).json({ message: 'Компания не найдена.' });
   }
 
-  const safeUser = sanitizeUser({ ...user, isLoggedIn: true });
-  if (company.status === 'pending') {
-    return res.status(202).json({ status: 'pending', company, user: safeUser });
+  const companyIndex = db.companies.findIndex((item) => Number(item.id) === Number(company.id));
+  const syncedCompany = syncCompanySubscription(company);
+  if (companyIndex >= 0) {
+    db.companies[companyIndex] = syncedCompany;
   }
 
-  if (company.status === 'rejected') {
+  const safeUser = sanitizeUser({ ...user, isLoggedIn: true });
+  if (syncedCompany.status === 'rejected' || syncedCompany.subscriptionStatus === 'rejected') {
+    await saveDb(db);
     return res.status(403).json({
       status: 'rejected',
-      message: company.rejectionReason || 'Заявка компании отклонена.',
-      company,
+      message: syncedCompany.rejectionReason || 'Заявка компании отклонена.',
+      company: syncedCompany,
       user: safeUser,
     });
   }
 
-  if (company.status === 'blocked' || company.status === 'inactive' || company.status === 'archived') {
+  if (company.status === 'pending') {
+    await saveDb(db);
+    return res.status(202).json({
+      status: 'pending',
+      message: 'Заявка компании и оплата подписки отправлены super admin на проверку.',
+      company: syncedCompany,
+      user: safeUser,
+    });
+  }
+
+  if (!isCompanySubscriptionActive(syncedCompany)) {
+    await saveDb(db);
+    const blockedStatus = syncedCompany.subscriptionStatus === 'payment_review' ? 'payment_review' : 'subscription_required';
+    return res.status(402).json({
+      status: blockedStatus,
+      message: syncedCompany.subscriptionStatus === 'payment_review'
+        ? 'Оплата подписки отправлена и ждёт подтверждения super admin.'
+        : 'Чтобы открыть TravelPay Business, оплатите подписку на 30 дней.',
+      company: syncedCompany,
+      user: safeUser,
+      subscription: {
+        plan: syncedCompany.subscriptionPlan,
+        price: syncedCompany.subscriptionPrice,
+        status: syncedCompany.subscriptionStatus,
+        expiresAt: syncedCompany.subscriptionExpiresAt,
+      },
+    });
+  }
+
+  if (syncedCompany.status === 'blocked' || syncedCompany.status === 'inactive' || syncedCompany.status === 'archived') {
     return res.status(403).json({
-      status: company.status,
+      status: syncedCompany.status,
       message: 'Доступ компании временно ограничен.',
-      company,
+      company: syncedCompany,
       user: safeUser,
     });
   }
 
-  res.json({ status: 'active', company, user: safeUser });
+  await saveDb(db);
+  res.json({ status: 'active', company: syncedCompany, user: safeUser });
+}));
+
+app.post('/business/subscription/pay', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const email = normalizeString(req.body.email).toLowerCase();
+  const companyId = normalizeCompanyId(req.body.companyId, 0);
+  const company = ensureArray(db.companies).find((item) => (
+    (companyId && Number(item.id) === companyId)
+    || (!companyId && normalizeString(item.email).toLowerCase() === email)
+  ));
+
+  if (!company) {
+    return res.status(404).json({ message: 'Компания не найдена.' });
+  }
+
+  const owner = ensureArray(db.users).find((item) => Number(item.companyId) === Number(company.id) && normalizeRole(item.role) === 'company_admin');
+  const receiptImage = normalizeString(req.body.receiptImage);
+  if (!receiptImage || !/^data:(image\/(jpeg|jpg|png)|application\/pdf);base64,/i.test(receiptImage)) {
+    return res.status(400).json({ message: 'Загрузите чек подписки в формате JPG, PNG или PDF.' });
+  }
+
+  const request = normalizeBusinessSubscriptionRequest({
+    id: nextId(ensureArray(db.businessSubscriptionRequests)),
+    companyId: company.id,
+    companyName: company.name,
+    ownerUserId: owner?.id,
+    ownerName: owner?.name,
+    ownerEmail: owner?.email || company.email,
+    plan: 'business_monthly',
+    months: 1,
+    amount: BUSINESS_SUBSCRIPTION_PRICE,
+    status: 'pending',
+    receiptImage,
+    receiptName: req.body.receiptName,
+    receiptType: req.body.receiptType,
+    comment: req.body.comment,
+    contractVersion: company.contractVersion || BUSINESS_CONTRACT_VERSION,
+    createdAt: new Date().toISOString(),
+  });
+
+  db.businessSubscriptionRequests = ensureArray(db.businessSubscriptionRequests);
+  db.businessSubscriptionRequests.push(request);
+  db.companies = ensureArray(db.companies).map((item) => (
+    Number(item.id) === Number(company.id)
+      ? normalizeCompany({
+        ...item,
+        status: 'pending',
+        subscriptionStatus: 'payment_review',
+        subscriptionLastRequestId: request.id,
+        updatedAt: new Date().toISOString(),
+      })
+      : item
+  ));
+
+  notifyUsers(db, (item) => normalizeRole(item?.role) === 'super_admin', {
+    type: 'business-subscription-paid',
+    title: 'Оплата подписки от компании',
+    description: `${company.name} повторно отправила оплату подписки на ${BUSINESS_SUBSCRIPTION_PRICE.toLocaleString('ru-RU')} сом.`,
+  });
+
+  notifyUsers(db, (item) => Number(item.companyId) === Number(company.id) && isCompanyStaff(item), {
+    type: 'business-subscription-review',
+    title: 'Подписка отправлена на проверку',
+    description: 'Чек отправлен. После подтверждения super admin доступ к Business откроется на 30 дней.',
+  });
+
+  await saveDb(db);
+  const updatedCompany = ensureArray(db.companies).find((item) => Number(item.id) === Number(company.id));
+  res.status(201).json({ request, company: updatedCompany });
+}));
+
+app.get('/api/admin/business-subscriptions', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  if (!currentUser || !isAdminUser(currentUser)) {
+    return res.status(403).json({ message: 'Доступ разрешён только администраторам.' });
+  }
+
+  let requests = ensureArray(db.businessSubscriptionRequests).map(normalizeBusinessSubscriptionRequest);
+  if (!isSuperAdmin(currentUser)) {
+    requests = requests.filter((item) => Number(item.companyId) === Number(currentUser.companyId));
+  }
+  res.json(requests);
+}));
+
+app.put('/api/admin/business-subscriptions/:id/approve', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  if (!currentUser || !isSuperAdmin(currentUser)) {
+    return res.status(403).json({ message: 'Подтверждать подписку может только super admin.' });
+  }
+
+  const requestIndex = ensureArray(db.businessSubscriptionRequests).findIndex((item) => Number(item.id) === Number(req.params.id));
+  if (requestIndex === -1) {
+    return res.status(404).json({ message: 'Заявка на подписку не найдена.' });
+  }
+
+  const request = normalizeBusinessSubscriptionRequest(db.businessSubscriptionRequests[requestIndex]);
+  const companyIndex = ensureArray(db.companies).findIndex((item) => Number(item.id) === Number(request.companyId));
+  if (companyIndex === -1) {
+    return res.status(404).json({ message: 'Компания не найдена.' });
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + (SUBSCRIPTION_MONTH_DAYS * DAY_MS)).toISOString();
+  db.businessSubscriptionRequests[requestIndex] = normalizeBusinessSubscriptionRequest({
+    ...request,
+    status: 'approved',
+    adminComment: req.body.adminComment,
+    reviewedAt: now.toISOString(),
+    reviewedBy: currentUser.id,
+  });
+  db.companies[companyIndex] = normalizeCompany({
+    ...db.companies[companyIndex],
+    status: 'active',
+    verified: true,
+    subscriptionStatus: 'active',
+    subscriptionStartedAt: now.toISOString(),
+    subscriptionPaidAt: now.toISOString(),
+    subscriptionExpiresAt: expiresAt,
+    subscriptionLastRequestId: request.id,
+    updatedAt: now.toISOString(),
+  });
+
+  notifyUsers(db, (item) => Number(item.companyId) === Number(request.companyId) && isCompanyStaff(item), {
+    type: 'business-subscription-approved',
+    title: 'Подписка активирована',
+    description: `Доступ к TravelPay Business открыт до ${new Date(expiresAt).toLocaleDateString('ru-RU')}.`,
+  });
+
+  await saveDb(db);
+  res.json({
+    request: db.businessSubscriptionRequests[requestIndex],
+    company: db.companies[companyIndex],
+  });
+}));
+
+app.put('/api/admin/business-subscriptions/:id/reject', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  if (!currentUser || !isSuperAdmin(currentUser)) {
+    return res.status(403).json({ message: 'Отклонять подписку может только super admin.' });
+  }
+
+  const requestIndex = ensureArray(db.businessSubscriptionRequests).findIndex((item) => Number(item.id) === Number(req.params.id));
+  if (requestIndex === -1) {
+    return res.status(404).json({ message: 'Заявка на подписку не найдена.' });
+  }
+
+  const request = normalizeBusinessSubscriptionRequest(db.businessSubscriptionRequests[requestIndex]);
+  const companyIndex = ensureArray(db.companies).findIndex((item) => Number(item.id) === Number(request.companyId));
+  if (companyIndex === -1) {
+    return res.status(404).json({ message: 'Компания не найдена.' });
+  }
+
+  db.businessSubscriptionRequests[requestIndex] = normalizeBusinessSubscriptionRequest({
+    ...request,
+    status: 'rejected',
+    adminComment: normalizeString(req.body.adminComment, 'Нужна повторная оплата или корректный чек.'),
+    reviewedAt: new Date().toISOString(),
+    reviewedBy: currentUser.id,
+  });
+  db.companies[companyIndex] = normalizeCompany({
+    ...db.companies[companyIndex],
+    status: 'rejected',
+    verified: false,
+    rejectionReason: normalizeString(req.body.adminComment, 'Проверьте паспорт, данные компании или чек оплаты.'),
+    subscriptionStatus: 'rejected',
+    updatedAt: new Date().toISOString(),
+  });
+
+  notifyUsers(db, (item) => Number(item.companyId) === Number(request.companyId) && isCompanyStaff(item), {
+    type: 'business-subscription-rejected',
+    title: 'Оплата подписки отклонена',
+    description: normalizeString(req.body.adminComment, 'Проверьте чек и отправьте оплату повторно.'),
+  });
+
+  await saveDb(db);
+  res.json({
+    request: db.businessSubscriptionRequests[requestIndex],
+    company: db.companies[companyIndex],
+  });
 }));
 
 const requireAdminUser = (user, res) => {
@@ -1240,6 +1783,30 @@ const bookingOverlapsDate = (booking, date) => {
   return normalized >= start && normalized < end;
 };
 
+const clockToMinutes = (value, fallback = '00:00') => {
+  const match = String(value || fallback).match(/(\d{1,2}):(\d{2})/);
+  if (!match) return 0;
+  const hours = Math.min(Math.max(Number(match[1]), 0), 23);
+  const minutes = Math.min(Math.max(Number(match[2]), 0), 59);
+  return (hours * 60) + minutes;
+};
+
+const bookingOverlapsTime = (booking, date, startTime, endTime) => {
+  if (booking.status === 'cancelled' || booking.status === 'rejected') return false;
+  if (!bookingOverlapsDate(booking, date)) return false;
+  const leftStart = clockToMinutes(booking.startTime || booking.checkInTime, '14:00');
+  const leftEnd = clockToMinutes(booking.endTime, '16:00');
+  const rightStart = clockToMinutes(startTime, '14:00');
+  const rightEnd = clockToMinutes(endTime, '16:00');
+  return Math.max(leftStart, rightStart) < Math.min(leftEnd, rightEnd);
+};
+
+const getStayAvailabilityForSlot = (stay, bookings, date, startTime, endTime) => {
+  const total = Math.max(Number(stay?.availableCount || stay?.totalCount || 1), 0);
+  const occupied = bookings.filter((booking) => Number(booking.stayId) === Number(stay?.id) && bookingOverlapsTime(booking, date, startTime, endTime)).length;
+  return Math.max(total - occupied, 0);
+};
+
 const getStayAvailabilityForDate = (stay, bookings, date) => {
   const total = Math.max(Number(stay?.availableCount || stay?.totalCount || 1), 0);
   const occupied = bookings.filter((booking) => Number(booking.stayId) === Number(stay?.id) && bookingOverlapsDate(booking, date)).length;
@@ -1267,6 +1834,54 @@ const buildStayAvailability = (stay, bookings, monthValue) => {
   });
 };
 
+const validateStayBookingInput = ({ stay, body, bookings = [], ignoreBookingId = null }) => {
+  const checkIn = parseDay(body.checkInDate);
+  const requestedNights = Math.max(Number(body.nights) || 1, 1);
+  const checkOut = body.checkOutDate ? parseDay(body.checkOutDate) : (checkIn ? addDateDays(checkIn, requestedNights) : null);
+  const today = parseDay(new Date());
+  const startTime = normalizeString(body.startTime || body.checkInTime);
+  const endTime = normalizeString(body.endTime);
+  const paymentReceiptUrl = normalizeString(body.paymentReceiptUrl || body.receiptImage);
+
+  if (!checkIn || !checkOut || checkOut <= checkIn || checkIn < today) {
+    return { error: { status: 400, message: 'Выберите корректные даты проживания.' } };
+  }
+
+  if (!startTime || !endTime || clockToMinutes(endTime) <= clockToMinutes(startTime)) {
+    return { error: { status: 400, message: 'Выберите корректное время бронирования.' } };
+  }
+
+  if (!normalizeString(body.clientName) || !normalizeString(body.clientPhone)) {
+    return { error: { status: 400, message: 'Укажите имя и телефон для связи.' } };
+  }
+
+  if (body.prepaymentRequired !== false && !paymentReceiptUrl) {
+    return { error: { status: 400, message: 'Загрузите чек предоплаты.' } };
+  }
+
+  const activeBookings = bookings
+    .map(normalizeStayBooking)
+    .filter((booking) => Number(booking.id) !== Number(ignoreBookingId));
+
+  for (let date = new Date(checkIn); date < checkOut; date = addDateDays(date, 1)) {
+    if (getStayAvailabilityForDate(stay, activeBookings, date) <= 0) {
+      return { error: { status: 409, message: 'На выбранные даты свободных домиков уже нет.' } };
+    }
+    if (getStayAvailabilityForSlot(stay, activeBookings, date, startTime, endTime) <= 0) {
+      return { error: { status: 409, message: 'Это время уже занято. Выберите другой слот.' } };
+    }
+  }
+
+  return {
+    checkIn,
+    checkOut,
+    startTime,
+    endTime,
+    paymentReceiptUrl,
+    nights: Math.max(Math.ceil((checkOut - checkIn) / DAY_MS), 1),
+  };
+};
+
 const buildTourResponse = (tour, accommodations = []) => {
   const embedded = ensureArray(tour.accommodations).map(toTourAccommodation);
   const linked = accommodations
@@ -1288,8 +1903,91 @@ const buildTourResponse = (tour, accommodations = []) => {
   };
 };
 
+const enrichEntityCompanyFields = (entity, companiesById) => {
+  const company = companiesById.get(normalizeCompanyId(entity.companyId));
+  const brand = getCompanyBrandFields(company);
+
+  return {
+    ...entity,
+    companyId: brand.companyId,
+    companyName: entity.companyName || brand.companyName,
+    companyLogo: entity.companyLogo || brand.companyLogo,
+    companyCity: entity.companyCity || brand.companyCity,
+    companyVerified: entity.companyVerified !== undefined ? Boolean(entity.companyVerified) : brand.companyVerified,
+    createdByBusiness: entity.createdByBusiness !== undefined ? Boolean(entity.createdByBusiness) : brand.createdByBusiness,
+  };
+};
+
+const calculateStayBookingExtras = (stay, payload, nights) => {
+  const configuredServices = ensureArray(stay?.extraServices).filter((service) => service.active !== false);
+  const incomingSelections = Array.isArray(payload?.extras) ? payload.extras : [];
+  const selectionsById = new Map(
+    incomingSelections
+      .filter((item) => item && item.serviceId)
+      .map((item) => [String(item.serviceId), item]),
+  );
+
+  const extras = configuredServices.map((service) => {
+    const selection = selectionsById.get(String(service.id)) || {};
+    if (service.type === 'quantity') {
+      const quantity = Math.min(Math.max(Number(selection.quantity) || 0, 0), Math.max(Number(service.maxQuantity) || 1, 1));
+      return {
+        serviceId: String(service.id),
+        title: service.title,
+        type: service.type,
+        quantity,
+        selected: quantity > 0,
+        selectedOptionId: '',
+        selectedOptionLabel: '',
+        unitPrice: Number(service.price) || 0,
+        total: quantity * (Number(service.price) || 0),
+      };
+    }
+
+    if (service.type === 'select') {
+      const selectedOption = ensureArray(service.options).find((option) => String(option.id) === String(selection.selectedOptionId));
+      return {
+        serviceId: String(service.id),
+        title: service.title,
+        type: service.type,
+        quantity: selectedOption ? 1 : 0,
+        selected: Boolean(selectedOption),
+        selectedOptionId: selectedOption ? String(selectedOption.id) : '',
+        selectedOptionLabel: selectedOption?.label || '',
+        unitPrice: Number(selectedOption?.price) || 0,
+        total: Number(selectedOption?.price) || 0,
+      };
+    }
+
+    const selected = Boolean(selection.selected);
+    return {
+      serviceId: String(service.id),
+      title: service.title,
+      type: service.type,
+      quantity: selected ? 1 : 0,
+      selected,
+      selectedOptionId: '',
+      selectedOptionLabel: '',
+      unitPrice: Number(service.price) || 0,
+      total: selected ? (Number(service.price) || 0) : 0,
+    };
+  }).filter((extra) => extra.selected || extra.quantity > 0);
+
+  const baseAmount = (Number(stay?.pricePerNight) || 0) * Math.max(Number(nights) || 1, 1);
+  const extrasAmount = extras.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
+
+  return {
+    extras,
+    baseAmount,
+    extrasAmount,
+    amount: baseAmount + extrasAmount,
+  };
+};
+
 app.get('/companies', asyncHandler(async (req, res) => {
   const db = await readDb();
+  const changed = syncAllCompanySubscriptions(db);
+  if (changed) await saveDb(db);
   const currentUser = getAuthenticatedUser(db, req);
 
   if (isSuperAdmin(currentUser)) {
@@ -1356,17 +2054,14 @@ app.get('/accommodations', asyncHandler(async (req, res) => {
   const currentUser = getAuthenticatedUser(db, req);
   const { tourId } = req.query;
   let result = filterAccommodationsByScope(db.accommodations || [], currentUser);
+  const companiesById = new Map((db.companies || []).map((company) => [normalizeCompanyId(company.id), company]));
 
   if (tourId) {
     const normalizedTourId = Number(tourId);
     result = result.filter((item) => item.linkedTourIds.includes(normalizedTourId));
   }
 
-  const companiesById = new Map((db.companies || []).map((company) => [normalizeCompanyId(company.id), company]));
-  res.json(result.map((item) => ({
-    ...item,
-    companyName: item.companyName || companiesById.get(normalizeCompanyId(item.companyId))?.name || '',
-  })));
+  res.json(result.map((item) => enrichEntityCompanyFields(item, companiesById)));
 }));
 
 app.post('/accommodations', asyncHandler(async (req, res) => {
@@ -1388,8 +2083,7 @@ app.post('/accommodations', asyncHandler(async (req, res) => {
   const accommodation = normalizeAccommodationEntity({
     ...req.body,
     id: nextId(db.accommodations || []),
-    companyId,
-    companyName: company?.name || req.body.companyName || '',
+    ...getCompanyBrandFields(company),
   });
 
   if (!accommodation.title || !accommodation.location || !accommodation.pricePerNight) {
@@ -1434,8 +2128,7 @@ app.put('/accommodations/:id', asyncHandler(async (req, res) => {
     ...db.accommodations[index],
     ...req.body,
     id,
-    companyId,
-    companyName: company?.name || db.accommodations[index].companyName || req.body.companyName || '',
+    ...getCompanyBrandFields(company),
   });
 
   await saveDb(db);
@@ -1499,6 +2192,8 @@ app.get('/stay-bookings', asyncHandler(async (req, res) => {
           stayId: booking.stayId,
           checkInDate: booking.checkInDate,
           checkOutDate: booking.checkOutDate,
+          startTime: booking.startTime || booking.checkInTime,
+          endTime: booking.endTime,
           status: booking.status,
         }));
       return res.json(result);
@@ -1519,27 +2214,18 @@ app.post('/stay-bookings', asyncHandler(async (req, res) => {
     return res.status(404).json({ message: 'Домик недоступен для бронирования.' });
   }
 
-  const checkIn = parseDay(req.body.checkInDate);
-  const nights = Math.max(Number(req.body.nights) || 1, 1);
-  const checkOut = req.body.checkOutDate ? parseDay(req.body.checkOutDate) : (checkIn ? addDateDays(checkIn, nights) : null);
-  const today = parseDay(new Date());
+  const validated = validateStayBookingInput({
+    stay,
+    body: req.body,
+    bookings: ensureArray(db.stayBookings),
+  });
 
-  if (!checkIn || !checkOut || checkOut <= checkIn || checkIn < today) {
-    return res.status(400).json({ message: 'Выберите корректные даты проживания.' });
-  }
-
-  if (!normalizeString(req.body.clientName) || !normalizeString(req.body.clientPhone)) {
-    return res.status(400).json({ message: 'Укажите имя и телефон для связи.' });
-  }
-
-  const activeBookings = ensureArray(db.stayBookings).map(normalizeStayBooking);
-  for (let date = new Date(checkIn); date < checkOut; date = addDateDays(date, 1)) {
-    if (getStayAvailabilityForDate(stay, activeBookings, date) <= 0) {
-      return res.status(409).json({ message: 'На выбранные даты свободных домиков уже нет.' });
-    }
+  if (validated.error) {
+    return res.status(validated.error.status).json({ message: validated.error.message });
   }
 
   const company = ensureArray(db.companies).find((item) => Number(item.id) === normalizeCompanyId(stay.companyId));
+  const pricing = calculateStayBookingExtras(stay, req.body, validated.nights);
   const booking = normalizeStayBooking({
     ...req.body,
     id: nextId(ensureArray(db.stayBookings)),
@@ -1548,11 +2234,23 @@ app.post('/stay-bookings', asyncHandler(async (req, res) => {
     companyName: stay.companyName || company?.name || '',
     stayTitle: stay.title || stay.name,
     location: stay.location,
-    checkInDate: checkIn.toISOString(),
-    checkOutDate: checkOut.toISOString(),
-    nights: Math.max(Math.ceil((checkOut - checkIn) / DAY_MS), 1),
-    amount: Number(req.body.amount) || (Number(stay.pricePerNight || 0) * Math.max(Math.ceil((checkOut - checkIn) / DAY_MS), 1)),
-    status: 'pending',
+    checkInDate: validated.checkIn.toISOString(),
+    checkOutDate: validated.checkOut.toISOString(),
+    checkInTime: validated.startTime,
+    startTime: validated.startTime,
+    endTime: validated.endTime,
+    nights: validated.nights,
+    baseAmount: pricing.baseAmount,
+    extrasAmount: pricing.extrasAmount,
+    extras: pricing.extras,
+    amount: pricing.amount,
+    prepaymentAmount: Number(req.body.prepaymentAmount) || 0,
+    prepaymentPercent: Number(req.body.prepaymentPercent) || 0,
+    status: validated.paymentReceiptUrl ? 'payment_review' : 'pending_payment',
+    paymentStatus: validated.paymentReceiptUrl ? 'review' : 'pending',
+    paymentReceiptUrl: validated.paymentReceiptUrl,
+    paymentReceiptName: req.body.paymentReceiptName,
+    paymentReceiptType: req.body.paymentReceiptType,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
@@ -1582,12 +2280,73 @@ app.put('/stay-bookings/:id', asyncHandler(async (req, res) => {
     return res.status(403).json({ message: 'Нельзя изменять брони другой компании.' });
   }
 
+  const currentBooking = normalizeStayBooking(db.stayBookings[index]);
+  const stay = ensureArray(db.accommodations).find((item) => Number(item.id) === Number(currentBooking.stayId));
+
+  if (!stay) {
+    return res.status(404).json({ message: 'Домик для этой брони не найден.' });
+  }
+
+  const mergedPayload = {
+    ...currentBooking,
+    ...req.body,
+    stayId: currentBooking.stayId,
+    companyId: currentBooking.companyId,
+    companyName: currentBooking.companyName,
+    stayTitle: currentBooking.stayTitle,
+    location: currentBooking.location,
+    prepaymentRequired: req.body.prepaymentRequired !== undefined
+      ? req.body.prepaymentRequired
+      : Boolean(currentBooking.paymentReceiptUrl),
+  };
+
+  const validated = validateStayBookingInput({
+    stay,
+    body: mergedPayload,
+    bookings: ensureArray(db.stayBookings),
+    ignoreBookingId: id,
+  });
+
+  if (validated.error) {
+    return res.status(validated.error.status).json({ message: validated.error.message });
+  }
+
+  const pricing = calculateStayBookingExtras(stay, mergedPayload, validated.nights);
+
   db.stayBookings[index] = normalizeStayBooking({
-    ...db.stayBookings[index],
+    ...currentBooking,
     ...req.body,
     id,
-    stayId: db.stayBookings[index].stayId,
-    companyId: db.stayBookings[index].companyId,
+    stayId: currentBooking.stayId,
+    companyId: currentBooking.companyId,
+    companyName: currentBooking.companyName,
+    stayTitle: currentBooking.stayTitle,
+    location: currentBooking.location,
+    checkInDate: validated.checkIn.toISOString(),
+    checkOutDate: validated.checkOut.toISOString(),
+    checkInTime: validated.startTime,
+    startTime: validated.startTime,
+    endTime: validated.endTime,
+    nights: validated.nights,
+    baseAmount: pricing.baseAmount,
+    extrasAmount: pricing.extrasAmount,
+    extras: pricing.extras,
+    amount: pricing.amount,
+    prepaymentAmount: Number(req.body.prepaymentAmount ?? currentBooking.prepaymentAmount) || 0,
+    prepaymentPercent: Number(req.body.prepaymentPercent ?? currentBooking.prepaymentPercent) || 0,
+    paymentReceiptUrl: validated.paymentReceiptUrl || currentBooking.paymentReceiptUrl,
+    rejectionReason: req.body.status === 'rejected'
+      ? normalizeString(req.body.rejectionReason)
+      : req.body.status === 'confirmed'
+        ? ''
+        : req.body.rejectionReason ?? currentBooking.rejectionReason,
+    paymentStatus: req.body.status === 'confirmed'
+      ? 'paid'
+      : req.body.status === 'rejected'
+        ? 'rejected'
+        : req.body.paymentStatus || currentBooking.paymentStatus,
+    paymentReviewedAt: ['confirmed', 'rejected'].includes(req.body.status) ? new Date().toISOString() : req.body.paymentReviewedAt,
+    paymentReviewedBy: ['confirmed', 'rejected'].includes(req.body.status) ? currentUser?.id : req.body.paymentReviewedBy,
     updatedAt: new Date().toISOString(),
   });
 
@@ -1600,12 +2359,13 @@ app.get('/tours', asyncHandler(async (req, res) => {
   const currentUser = getAuthenticatedUser(db, req);
   const scopedAccommodations = filterAccommodationsByScope(db.accommodations || [], currentUser);
   const visiblePublicStatuses = new Set(['active', 'hot', 'discount', 'published']);
+  const companiesById = new Map((db.companies || []).map((company) => [normalizeCompanyId(company.id), company]));
 
   if (isCompanyStaff(currentUser)) {
     return res.json(
       db.tours
         .filter((tour) => normalizeCompanyId(tour.companyId) === getScopedCompanyId(currentUser))
-        .map((tour) => buildTourResponse(tour, scopedAccommodations)),
+        .map((tour) => buildTourResponse(enrichEntityCompanyFields(tour, companiesById), scopedAccommodations)),
     );
   }
 
@@ -1613,11 +2373,11 @@ app.get('/tours', asyncHandler(async (req, res) => {
     return res.json(
       db.tours
         .filter((tour) => visiblePublicStatuses.has(tour.status || 'active'))
-        .map((tour) => buildTourResponse(tour, scopedAccommodations)),
+        .map((tour) => buildTourResponse(enrichEntityCompanyFields(tour, companiesById), scopedAccommodations)),
     );
   }
 
-  res.json(db.tours.map((tour) => buildTourResponse(tour, scopedAccommodations)));
+  res.json(db.tours.map((tour) => buildTourResponse(enrichEntityCompanyFields(tour, companiesById), scopedAccommodations)));
 }));
 
 app.post('/tours', asyncHandler(async (req, res) => {
@@ -1639,12 +2399,15 @@ app.post('/tours', asyncHandler(async (req, res) => {
   const tour = normalizeTour({
     ...req.body,
     id: nextId(db.tours),
-    companyId,
-    companyName: company?.name || req.body.companyName || '',
+    ...getCompanyBrandFields(company),
   });
 
   if (!tour.title || !tour.description || !tour.image || !tour.price) {
     return res.status(400).json({ message: 'Заполните название, описание, цену и картинку тура.' });
+  }
+
+  if (!tour.departureSlots.length) {
+    return res.status(400).json({ message: 'Добавьте хотя бы одну дату и время отправления тура.' });
   }
 
   db.tours.push(tour);
@@ -1680,13 +2443,16 @@ app.put('/tours/:id', asyncHandler(async (req, res) => {
     : getScopedCompanyId(currentUser);
   const company = db.companies.find((item) => Number(item.id) === nextCompanyId);
 
-  db.tours[index] = normalizeTour({
+  const updatedTour = normalizeTour({
     ...db.tours[index],
     ...req.body,
     id,
-    companyId: nextCompanyId,
-    companyName: company?.name || db.tours[index].companyName || req.body.companyName || '',
+    ...getCompanyBrandFields(company),
   });
+  if (!updatedTour.departureSlots.length) {
+    return res.status(400).json({ message: 'Добавьте хотя бы одну дату и время отправления тура.' });
+  }
+  db.tours[index] = updatedTour;
   await saveDb(db);
   res.json(buildTourResponse(db.tours[index], filterAccommodationsByScope(db.accommodations || [], currentUser)));
 }));
@@ -1713,6 +2479,450 @@ app.delete('/tours/:id', asyncHandler(async (req, res) => {
   db.tours = db.tours.filter((item) => Number(item.id) !== id);
   await saveDb(db);
   res.status(204).end();
+}));
+
+const buildTourBookingHistoryRecord = (booking) => normalizeBooking({
+  id: `tour-booking-${booking.id}`,
+  tourId: booking.tourId,
+  companyId: booking.companyId,
+  companyName: booking.companyName,
+  clientName: booking.clientName,
+  clientPhone: booking.clientPhone,
+  clientEmail: booking.clientEmail,
+  tourTitle: booking.tourTitle,
+  location: booking.location,
+  image: booking.image,
+  amount: booking.amount,
+  status: booking.status === 'confirmed' ? 'paid' : booking.status,
+  paymentStatus: booking.paymentStatus,
+  purchasedAt: booking.createdAt,
+  travelDate: booking.travelDate,
+  date: booking.travelDate,
+  endDate: booking.endDate,
+  durationMinutes: booking.durationMinutes,
+  assignedTo: booking.companyName,
+  paymentMethod: booking.paymentMethod,
+  accommodation: booking.accommodation,
+  accommodationTotal: booking.accommodationTotal,
+  extraBedSelected: booking.extraBedSelected,
+  extraBedTotal: booking.extraBedTotal,
+  baseTourAmount: booking.baseTourAmount,
+});
+
+const addConfirmedTourBookingToUser = (db, booking) => {
+  const userIndex = db.users.findIndex((item) => Number(item.id) === Number(booking.userId));
+  if (userIndex === -1) return;
+
+  const user = db.users[userIndex];
+  const historyId = `tour-booking-${booking.id}`;
+  const currentHistory = ensureArray(user.travelHistory || user.bookings)
+    .filter((item) => String(item.id) !== historyId);
+  const historyRecord = buildTourBookingHistoryRecord(booking);
+  db.users[userIndex] = normalizeUser({
+    ...user,
+    travelHistory: [historyRecord, ...currentHistory],
+    bookings: [historyRecord, ...currentHistory],
+    notifications: [
+      {
+        id: createId('notification'),
+        type: 'booking',
+        title: 'Бронирование тура подтверждено',
+        description: `${booking.tourTitle} — заявка подтверждена.`,
+        date: new Date().toISOString(),
+        read: false,
+      },
+      ...ensureArray(user.notifications),
+    ],
+  });
+};
+
+const addNotificationToUser = (db, userId, notification) => {
+  const userIndex = db.users.findIndex((item) => Number(item.id) === Number(userId));
+  if (userIndex === -1) return null;
+
+  const user = db.users[userIndex];
+  db.users[userIndex] = normalizeUser({
+    ...user,
+    notifications: [
+      normalizeNotification({
+        id: createId('notification'),
+        date: new Date().toISOString(),
+        read: false,
+        ...notification,
+      }),
+      ...ensureArray(user.notifications),
+    ],
+  });
+
+  return db.users[userIndex];
+};
+
+const syncTourBookingLifecycleStatus = (booking) => {
+  const normalized = normalizeTourBooking(booking);
+  if (normalized.status !== 'confirmed') return normalized;
+
+  const finishAt = normalized.endDate || normalized.travelDate;
+  if (!finishAt) return normalized;
+
+  const finishTime = new Date(finishAt).getTime();
+  if (Number.isNaN(finishTime)) return normalized;
+
+  if (finishTime < Date.now()) {
+    return normalizeTourBooking({
+      ...normalized,
+      status: 'completed',
+      paymentStatus: normalized.paymentStatus === 'paid' ? 'paid' : normalized.paymentStatus,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  return normalized;
+};
+
+const syncAllTourBookingStatuses = (db) => {
+  const currentBookings = ensureArray(db.tourBookings).map(normalizeTourBooking);
+  let changed = false;
+  const nextBookings = currentBookings.map((booking) => {
+    const synced = syncTourBookingLifecycleStatus(booking);
+    if (synced.status !== booking.status || synced.updatedAt !== booking.updatedAt) {
+      changed = true;
+    }
+    return synced;
+  });
+
+  if (changed) {
+    db.tourBookings = nextBookings;
+  }
+
+  return { bookings: nextBookings, changed };
+};
+
+const getTourDepartureAvailability = (db, tour) => {
+  const activeBookings = ensureArray(db.tourBookings)
+    .map(normalizeTourBooking)
+    .filter((booking) => Number(booking.tourId) === Number(tour.id))
+    .filter((booking) => !['cancelled', 'rejected'].includes(booking.status));
+
+  return ensureArray(tour.departureSlots).map((slot) => {
+    const bookedSeats = activeBookings
+      .filter((booking) => booking.departureSlotId === slot.id
+        || (!booking.departureSlotId && normalizeDateValue(booking.travelDate) === normalizeDateValue(slot.startAt)))
+      .reduce((sum, booking) => sum + Math.max(Number(booking.people) || 1, 1), 0);
+    return {
+      ...slot,
+      bookedSeats,
+      remainingSeats: Math.max(Number(slot.seats) - bookedSeats, 0),
+      soldOut: bookedSeats >= Number(slot.seats),
+    };
+  });
+};
+
+app.get('/tour-bookings/availability', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const tour = db.tours.find((item) => Number(item.id) === Number(req.query.tourId));
+
+  if (!tour) {
+    return res.status(404).json({ message: 'Тур не найден.' });
+  }
+
+  res.json(getTourDepartureAvailability(db, tour));
+}));
+
+app.get('/tour-bookings', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!currentUser) {
+    return res.status(401).json({ message: 'Необходимо войти в аккаунт.' });
+  }
+
+  const synced = syncAllTourBookingStatuses(db);
+  if (synced.changed) {
+    await saveDb(db);
+  }
+
+  let bookings = synced.bookings;
+  if (isSuperAdmin(currentUser)) {
+    return res.json(bookings);
+  }
+
+  if (isCompanyStaff(currentUser)) {
+    bookings = bookings.filter((item) => Number(item.companyId) === getScopedCompanyId(currentUser));
+  } else {
+    bookings = bookings.filter((item) => Number(item.userId) === Number(currentUser.id));
+  }
+
+  res.json(bookings);
+}));
+
+app.post('/tour-bookings', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  const synced = syncAllTourBookingStatuses(db);
+  if (synced.changed) {
+    await saveDb(db);
+  }
+
+  if (!currentUser) {
+    return res.status(401).json({ message: 'Необходимо войти в аккаунт.' });
+  }
+
+  const tour = db.tours.find((item) => Number(item.id) === Number(req.body.tourId));
+  if (!tour || ['cancelled', 'sold_out', 'archived'].includes(tour.status)) {
+    return res.status(404).json({ message: 'Тур недоступен для бронирования.' });
+  }
+
+  const people = Math.max(Number(req.body.people) || 1, 1);
+  if (people > 12) {
+    return res.status(400).json({ message: 'В одной заявке может быть не более 12 участников.' });
+  }
+
+  const departureSlotId = normalizeString(req.body.departureSlotId);
+  const departureSlot = getTourDepartureAvailability(db, tour)
+    .find((slot) => slot.id === departureSlotId && slot.active !== false);
+  if (!departureSlot) {
+    return res.status(400).json({ message: 'Выберите доступное отправление из расписания компании.' });
+  }
+  if (new Date(departureSlot.startAt).getTime() < Date.now()) {
+    return res.status(400).json({ message: 'Это отправление уже состоялось. Выберите другую дату.' });
+  }
+  if (departureSlot.remainingSeats < people) {
+    return res.status(409).json({ message: `На это отправление осталось мест: ${departureSlot.remainingSeats}.` });
+  }
+
+  const travelDate = departureSlot.startAt;
+  const departureTime = new Date(travelDate).toLocaleTimeString('ru-RU', {
+    timeZone: 'Asia/Bishkek',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const durationDays = Math.max(Number(String(tour.duration || '').match(/\d+/)?.[0] || 1), 1);
+  const baseTourAmount = Number(tour.price || 0) * people;
+  const accommodationId = Number(req.body.accommodation?.id || req.body.accommodationId) || 0;
+  const accommodation = accommodationId
+    ? ensureArray(db.accommodations).find((item) => Number(item.id) === accommodationId)
+    : null;
+  const accommodationTotal = accommodation ? Number(accommodation.pricePerNight || 0) : 0;
+  const extraBedSelected = Boolean(req.body.extraBedSelected && accommodation?.extraBedAvailable);
+  const extraBedTotal = extraBedSelected ? Number(accommodation.extraBedPrice || 0) : 0;
+  const amount = baseTourAmount + accommodationTotal + extraBedTotal;
+  const paymentMethod = req.body.paymentMethod === 'savings' ? 'savings' : 'receipt';
+  const paymentReceiptUrl = normalizeString(req.body.paymentReceiptUrl || req.body.receiptImage);
+
+  if (paymentMethod === 'receipt') {
+    if (!/^data:(image\/(jpeg|jpg|png)|application\/pdf);base64,/i.test(paymentReceiptUrl)) {
+      return res.status(400).json({ message: 'Загрузите чек в формате JPG, PNG или PDF.' });
+    }
+    if (paymentReceiptUrl.length > 8 * 1024 * 1024) {
+      return res.status(413).json({ message: 'Файл чека слишком большой. Максимальный размер — 6 МБ.' });
+    }
+  }
+
+  const prepaymentPercent = paymentMethod === 'savings'
+    ? 100
+    : Math.min(Math.max(Number(req.body.prepaymentPercent || tour.prepaymentPercent || 30), 10), 100);
+  const prepaymentAmount = paymentMethod === 'savings'
+    ? amount
+    : Math.round((amount * prepaymentPercent) / 100);
+
+  if (paymentMethod === 'savings') {
+    const savingsAmount = Number(currentUser.savings?.currentAmount || 0);
+    if (savingsAmount < amount) {
+      return res.status(400).json({ message: 'Недостаточно средств на накопительном счёте.' });
+    }
+  }
+
+  const company = db.companies.find((item) => Number(item.id) === normalizeCompanyId(tour.companyId));
+  const now = new Date().toISOString();
+  const booking = normalizeTourBooking({
+    ...req.body,
+    id: nextId(ensureArray(db.tourBookings)),
+    userId: currentUser.id,
+    tourId: tour.id,
+    departureSlotId: departureSlot.id,
+    companyId: tour.companyId,
+    companyName: tour.companyName || company?.name || 'TravelPay',
+    tourTitle: tour.title,
+    location: tour.location,
+    image: tour.image,
+    clientName: req.body.clientName || currentUser.name,
+    clientPhone: req.body.clientPhone || currentUser.phone,
+    clientEmail: req.body.clientEmail || currentUser.email,
+    people,
+    travelDate,
+    departureTime,
+    endDate: new Date(new Date(travelDate).getTime() + ((durationDays - 1) * DAY_MS)).toISOString(),
+    durationMinutes: durationDays * 24 * 60,
+    baseTourAmount,
+    accommodation,
+    accommodationTotal,
+    extraBedSelected,
+    extraBedTotal,
+    amount,
+    prepaymentPercent,
+    prepaymentAmount,
+    remainingAmount: Math.max(amount - prepaymentAmount, 0),
+    paymentMethod,
+    status: paymentMethod === 'savings' ? 'confirmed' : 'payment_review',
+    paymentStatus: paymentMethod === 'savings' ? 'paid' : 'review',
+    paymentReceiptUrl,
+    paymentReceiptName: req.body.paymentReceiptName,
+    paymentReceiptType: req.body.paymentReceiptType,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  db.tourBookings = ensureArray(db.tourBookings);
+  db.tourBookings.push(booking);
+
+  if (paymentMethod === 'savings') {
+    const userIndex = db.users.findIndex((item) => Number(item.id) === Number(currentUser.id));
+    db.users[userIndex] = normalizeUser({
+      ...db.users[userIndex],
+      savings: normalizeSavings({
+        ...db.users[userIndex].savings,
+        currentAmount: Number(db.users[userIndex].savings?.currentAmount || 0) - amount,
+      }),
+    });
+    addConfirmedTourBookingToUser(db, booking);
+  }
+
+  await saveDb(db);
+  const updatedUser = db.users.find((item) => Number(item.id) === Number(currentUser.id));
+  res.status(201).json({ booking, user: sanitizeUser(updatedUser) });
+}));
+
+app.put('/tour-bookings/:id', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+  const synced = syncAllTourBookingStatuses(db);
+  if (synced.changed) {
+    await saveDb(db);
+  }
+
+  if (!requireAdminUser(currentUser, res)) return;
+
+  const index = ensureArray(db.tourBookings).findIndex((item) => Number(item.id) === Number(req.params.id));
+  if (index === -1) {
+    return res.status(404).json({ message: 'Бронирование тура не найдено.' });
+  }
+
+  const currentBooking = normalizeTourBooking(db.tourBookings[index]);
+  if (!canAccessCompany(currentUser, currentBooking.companyId)) {
+    return res.status(403).json({ message: 'Нельзя изменять брони другой компании.' });
+  }
+
+  const nextStatus = TOUR_BOOKING_STATUSES.has(req.body.status) ? req.body.status : currentBooking.status;
+  const updatedBooking = normalizeTourBooking({
+    ...currentBooking,
+    status: nextStatus,
+    rejectionReason: nextStatus === 'rejected' ? req.body.rejectionReason : '',
+    paymentStatus: nextStatus === 'confirmed'
+      ? (currentBooking.prepaymentPercent < 100 ? 'prepaid' : 'paid')
+      : nextStatus === 'rejected' ? 'rejected' : currentBooking.paymentStatus,
+    paymentReviewedAt: ['confirmed', 'rejected'].includes(nextStatus) ? new Date().toISOString() : currentBooking.paymentReviewedAt,
+    paymentReviewedBy: ['confirmed', 'rejected'].includes(nextStatus) ? currentUser.id : currentBooking.paymentReviewedBy,
+    updatedAt: new Date().toISOString(),
+  });
+
+  db.tourBookings[index] = updatedBooking;
+  if (nextStatus === 'confirmed') addConfirmedTourBookingToUser(db, updatedBooking);
+  await saveDb(db);
+  res.json(updatedBooking);
+}));
+
+app.post('/tour-bookings/:id/cancel', asyncHandler(async (req, res) => {
+  const db = await readDb();
+  const currentUser = getAuthenticatedUser(db, req);
+
+  if (!currentUser) {
+    return res.status(401).json({ message: 'Необходимо войти в аккаунт.' });
+  }
+
+  const synced = syncAllTourBookingStatuses(db);
+  if (synced.changed) {
+    await saveDb(db);
+  }
+
+  const index = ensureArray(db.tourBookings).findIndex((item) => Number(item.id) === Number(req.params.id));
+  if (index === -1) {
+    return res.status(404).json({ message: 'Бронирование тура не найдено.' });
+  }
+
+  const booking = normalizeTourBooking(db.tourBookings[index]);
+  if (Number(booking.userId) !== Number(currentUser.id)) {
+    return res.status(403).json({ message: 'Можно отменять только свои бронирования.' });
+  }
+
+  if (['cancelled', 'rejected', 'completed'].includes(booking.status)) {
+    return res.status(409).json({ message: 'Эту бронь уже нельзя отменить.' });
+  }
+
+  const travelTime = new Date(booking.travelDate).getTime();
+  if (Number.isNaN(travelTime) || travelTime <= Date.now()) {
+    return res.status(409).json({ message: 'Нельзя отменить тур после начала отправления.' });
+  }
+
+  const hoursBeforeDeparture = (travelTime - Date.now()) / (60 * 60 * 1000);
+  if (booking.status === 'confirmed' && hoursBeforeDeparture < 24) {
+    return res.status(409).json({ message: 'Подтверждённую бронь можно отменить минимум за 24 часа до выезда.' });
+  }
+
+  const refundAmount = booking.paymentMethod === 'savings'
+    ? Number(booking.prepaymentAmount || booking.amount || 0)
+    : 0;
+
+  const updatedBooking = normalizeTourBooking({
+    ...booking,
+    status: 'cancelled',
+    paymentStatus: refundAmount > 0 ? 'refunded' : booking.paymentStatus,
+    cancellationReason: normalizeString(req.body.reason, 'Отменено клиентом') || 'Отменено клиентом',
+    cancelledAt: new Date().toISOString(),
+    refundedAmount: refundAmount,
+    updatedAt: new Date().toISOString(),
+  });
+
+  db.tourBookings[index] = updatedBooking;
+
+  const userIndex = db.users.findIndex((item) => Number(item.id) === Number(currentUser.id));
+  if (userIndex !== -1) {
+    const user = db.users[userIndex];
+    const historyId = `tour-booking-${updatedBooking.id}`;
+    const nextHistory = ensureArray(user.travelHistory || user.bookings)
+      .map(normalizeBooking)
+      .filter((item) => String(item.id) !== historyId);
+
+    db.users[userIndex] = normalizeUser({
+      ...user,
+      savings: refundAmount > 0 ? normalizeSavings({
+        ...user.savings,
+        currentAmount: Number(user.savings?.currentAmount || 0) + refundAmount,
+      }) : user.savings,
+      travelHistory: nextHistory,
+      bookings: nextHistory,
+    });
+  }
+
+  addNotificationToUser(db, currentUser.id, {
+    type: 'booking',
+    title: 'Бронь тура отменена',
+    description: refundAmount > 0
+      ? `${updatedBooking.tourTitle} — бронь отменена, ${refundAmount} сом возвращены на накопления.`
+      : `${updatedBooking.tourTitle} — бронь отменена.`,
+  });
+
+  addNotificationToUser(db, currentUser.id, {
+    type: 'info',
+    title: 'Правила отмены',
+    description: booking.paymentMethod === 'receipt' && booking.prepaymentAmount > 0
+      ? 'Предоплата по чеку требует ручной проверки тур-компанией.'
+      : 'Статус поездки обновлён в личном кабинете.',
+  });
+
+  await saveDb(db);
+  const responseUser = db.users.find((item) => Number(item.id) === Number(currentUser.id));
+  res.json({ booking: updatedBooking, user: sanitizeUser(responseUser) });
 }));
 
 const getTopupRequestWithUser = (request, users) => {
